@@ -1,8 +1,8 @@
 from __future__ import annotations
 import time
-from typing import Dict, Iterable, Iterator, List, Optional
 import requests
-
+import pandas as pd
+from typing import Dict, Iterable, Iterator, Optional, List
 from .config import TWITCH_CLIENT_ID, TWITCH_CLIENT_SECRET
 from .utils import flatten_record
 
@@ -67,3 +67,20 @@ class IGDBClient:
 
             offset += limit
             time.sleep(self.rate_sleep)
+
+
+    def fetch_df(
+        self,
+        endpoint: str,
+        fields: str = "*",
+        where: Optional[str] = None,
+        sort: str = "id asc",
+        max_rows: Optional[int] = None,) -> pd.DataFrame:
+        """
+        Fetch an endpoint into a pandas DataFrame using the existing paged() generator.
+        """
+        rows_iter = self.paged(endpoint=endpoint, fields=fields, where=where, sort=sort, max_rows=max_rows)
+        return pd.DataFrame.from_records(list(rows_iter))
+
+    # bind as instance method
+#IGDBClient.fetch_df = fetch_df
