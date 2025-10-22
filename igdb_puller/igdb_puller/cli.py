@@ -257,7 +257,7 @@ def pull_games_and_dependents(
     if target_ns is None:
         target_ns = inspect.currentframe().f_back.f_globals
 
-    # 1) games (reuse if already there)
+
     if "df_games" not in target_ns:
         # if not all_fields:
         #     # a reasonable default list (edit as needed)
