@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import math
 from typing import List
-
+from content_recommender import build_similarity, top_similar, top_similar_by_id
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -44,56 +44,74 @@ def _analytics_df(max_rows: int = 20000):
     return load_games_for_analytics(_client(), max_rows=max_rows)
 
 # ---------- UI ----------
-st.title("Games Popularity Explorer")
+# ---------- Header & centered search ----------
+st.markdown(
+    "<h1 style='text-align:center;margin:0.25rem 0 1rem;'>Games Popularity Explorer</h1>",
+    unsafe_allow_html=True
+)
 
-with st.sidebar:
-    st.header("Search")
-    query = st.text_input("Find a game", placeholder="e.g., The Witcher 3, Celeste, Elden Ring")
-    go = st.button("Search", type="primary", use_container_width=True)
-    st.markdown("---")
-    st.caption("Quick visuals powered by IGDB ratings. Increase sample size on the main page if needed.")
+c_l, c_mid, c_r = st.columns([1, 2, 1])
+with c_mid:
+    query = st.text_input(
+        " ",  # empty label for clean look
+        placeholder="Search a game (e.g., The Witcher 3, Celeste, Elden Ring)",
+        key="main_query",
+    )
+    go = st.button("Search", type="primary", use_container_width=True, key="main_go")
 
-col_main, col_side = st.columns([7, 5])
+st.markdown("---")
 
+# Two-pane layout: details (left) | recommendations (right)
+col_main, col_side = st.columns([9, 3])
+
+selected = None
+details = None
+
+# ---------- LEFT: Game search & details ----------
 with col_main:
-    st.subheader("Game search & details")
+    st.subheader("Game details")
+
     if go and query.strip():
         results = _search(query.strip())
         if not results:
             st.info("No matches. Try a different title.")
         else:
-            # selection list with cover thumbs
+            # same selection UX as before
             def _label(r):
                 year = ""
                 if r.get("first_release_date"):
-                    year = pd.to_datetime(r["first_release_date"], unit="s", errors="coerce").year
-                    if not (isinstance(year, int) and year > 0):
-                        year = ""
+                    yr = pd.to_datetime(r["first_release_date"], unit="s", errors="coerce").year
+                    year = yr if pd.notna(yr) else ""
                 rating = r.get("total_rating")
                 rtxt = f" ({rating:.1f})" if isinstance(rating, (int,float)) and not math.isnan(rating) else ""
                 return f'{r.get("name","")}{f" [{year}]" if year else ""}{rtxt}'
-            idx = st.selectbox("Select a game", options=list(range(len(results))), format_func=lambda i: _label(results[i]))
+
+            idx = st.selectbox(
+                "Select a game",
+                options=list(range(len(results))),
+                format_func=lambda i: _label(results[i]),
+                key="result_idx",
+            )
             selected = results[idx]
             details = _details(int(selected["id"]))
 
             # images
-            imgs: List[str] = details.get("images", [])
+            imgs = details.get("images", [])
             if imgs:
                 st.image(imgs, use_column_width=True, caption=[details["name"]]*len(imgs))
 
             # metadata
             meta_cols = st.columns(3)
             with meta_cols[0]:
-                st.metric("Total rating", f'{details["ratings"].get("total_rating") or "—"}')
-                st.metric("Total rating count", f'{details["ratings"].get("total_rating_count") or "—"}')
+                st.metric("Total rating", f'{round(details["ratings"].get("total_rating"),0) or "—"}')
+                st.metric("Total rating count", f'{round(details["ratings"].get("total_rating_count"),0) or "—"}')
             with meta_cols[1]:
-                st.metric("Agg. rating", f'{details["ratings"].get("aggregated_rating") or "—"}')
-                st.metric("Agg. rating count", f'{details["ratings"].get("aggregated_rating_count") or "—"}')
+                st.metric("Agg. rating", f'{round(details["ratings"].get("aggregated_rating"),2) or "—"}')
+                st.metric("Agg. rating count", f'{round(details["ratings"].get("aggregated_rating_count"),0) or "—"}')
             with meta_cols[2]:
                 year = pd.to_datetime(details.get("first_release_date"), unit="s", errors="coerce").year
                 st.metric("First release year", year if pd.notna(year) else "—")
 
-            # tags
             st.markdown("**Genres:** " + (", ".join(details.get("genres", [])) or "—"))
             st.markdown("**Platforms:** " + (", ".join(details.get("platforms", [])) or "—"))
             if details.get("publishers"):
@@ -101,7 +119,6 @@ with col_main:
             if details.get("developers"):
                 st.markdown("**Developers:** " + ", ".join(details["developers"]))
 
-            # summary / storyline
             if details.get("summary"):
                 with st.expander("Summary", expanded=True):
                     st.write(details["summary"])
@@ -109,52 +126,102 @@ with col_main:
                 with st.expander("Storyline"):
                     st.write(details["storyline"])
 
-            # websites
             sites = details.get("websites", [])
             if sites:
                 st.markdown("**Links:**")
                 for url, cat in sites:
                     st.markdown(f"- [{url}]({url})")
 
+# ---------- RIGHT: Recommendations for the selected game ----------
 with col_side:
-    st.subheader("Quick questions")
-    sample_n = st.slider("Sample size (top by rating count)", min_value=5000, max_value=40000, step=5000, value=20000)
-    df = _analytics_df(max_rows=sample_n)
+    st.subheader("Similar Games")
+    #show_debug = st.toggle("Show debug", value=False, key="rec_debug")
 
-    q = st.radio(
-        "Choose a question",
-        options=[
-            "Which is the most rated genre?",
-            "Which year has the highest rated games?",
-            "Which platform has the best games?",
-            "Which publisher has the best games?"
-        ],
-        index=0
-    )
+    if details is None:
+        st.info("Search a game to see recommendations.")
+    else:
+        client = _client()
 
-    if q == "Which is the most rated genre?":
-        out = df_most_rated_genre(_client(), df).head(20)
-        fig = px.bar(out, x="avg_rating", y="genre", orientation="h", title="Average rating by genre (top 20)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(out, use_container_width=True)
+        # helper
+        def ensure_int_list(x):
+            if x is None: return []
+            if isinstance(x, list): return [int(v) for v in x]
+            if isinstance(x, str): return [int(v) for v in x.split("|") if v]
+            try: return [int(x)]
+            except: return []
 
-    elif q == "Which year has the highest rated games?":
-        out = df_best_year(_client(), df)
-        fig = px.line(out, x="year", y="avg_rating", markers=True, title="Average rating by release year (n≥20)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(out, use_container_width=True)
+        raw = details.get("raw", {}) or {}
+        ratings = details.get("ratings", {}) or {}
+        rec_game_id = int(raw["id"]) if raw.get("id") is not None else int(selected["id"])
+        rec_genres    = ensure_int_list(raw.get("genres"))
+        rec_platforms = ensure_int_list(raw.get("platforms"))
+        rec_rating    = ratings.get("total_rating") or 0.0
 
-    elif q == "Which platform has the best games?":
-        out = df_best_platform(_client(), df).head(30)
-        fig = px.bar(out, x="avg_rating", y="platform", orientation="h", title="Average rating by platform (top 30)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(out, use_container_width=True)
+        if not rec_genres:
+            st.info("Not enough metadata (genre IDs) on this title to compute similarity.")
+        else:
+            fields = ",".join(["id","name","genres","platforms","total_rating","total_rating_count","cover.image_id"])
+            where = f"genres = ({','.join(map(str, rec_genres))}) & total_rating_count != null & total_rating_count > 25"
 
-    elif q == "Which publisher has the best games?":
-        out = df_best_publisher(_client(), df).head(25)
-        fig = px.bar(out, x="avg_rating", y="publisher", orientation="h", title="Average rating by publisher (n≥10)")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(out, use_container_width=True)
+            try:
+                rows = list(client.paged(
+                    endpoint="games",
+                    fields=fields,
+                    where=where,
+                    sort="total_rating_count desc",
+                    limit=200,
+                    max_rows=800
+                ))
+            except Exception as e:
+                st.exception(e)
+                rows = []
 
-st.markdown("---")
-st.caption("Built on your IGDB client (OAuth + paging) and registry conventions for endpoints/fields.")
+            cand = pd.DataFrame(rows)
+
+            # build seed row + sanitize
+            seed_row = {
+                "id": rec_game_id,
+                "name": details.get("name", selected.get("name", "Unknown")),
+                "genres": rec_genres,
+                "platforms": rec_platforms,
+                "total_rating": float(rec_rating),
+                "total_rating_count": int(raw.get("total_rating_count", 0)),
+            }
+
+            cand["genres"] = cand["genres"].apply(ensure_int_list)
+            cand["platforms"] = cand["platforms"].apply(ensure_int_list)
+            cand["normally"] = cand.get("normally", 0.0)
+            cand["completely"] = cand.get("completely", 0.0)
+
+            # keep seed + filter non-seed BEFORE featurization
+            cand_nonseed = cand[cand["id"].astype(int) != rec_game_id]
+            cand_nonseed = cand_nonseed[cand_nonseed["total_rating_count"].fillna(0) > 25]
+            cand = pd.concat([pd.DataFrame([seed_row]), cand_nonseed], ignore_index=True)
+            cand = cand.drop_duplicates(subset=["id"]).reset_index(drop=True)
+
+            # if show_debug:
+            #     st.caption(f"Candidates fetched: {len(cand)} (filtered by shared genres & rating_count>25)")
+            #     if not cand.empty:
+            #         st.dataframe(cand.head(25), use_container_width=True)
+
+            if cand.empty:
+                st.info("No similar games found from IGDB for this title.")
+            else:
+                try:
+                    clean_df, sim = build_similarity(cand)
+                    matched_id, recs = top_similar_by_id(clean_df, sim, int(rec_game_id), top_n=5)
+                except Exception as e:
+                    st.exception(e)
+                    recs = pd.DataFrame()
+
+                if recs is not None and not recs.empty:
+                    for _, r in recs.iterrows():
+                        cols = st.columns([5, 2])
+                        with cols[0]:
+                            st.markdown(f"**{r['name']}**")
+                            st.caption(f"Similarity: {r['similarity']:.2f}")
+                        with cols[1]:
+                            tr = r.get("total_rating")
+                            st.metric("Rating", f"{tr:.1f}" if isinstance(tr, (int, float)) else "—")
+                else:
+                    st.info("I couldn't compute any close matches from the candidate pool.")
