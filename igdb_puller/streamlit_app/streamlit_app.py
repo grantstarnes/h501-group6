@@ -104,13 +104,13 @@ with col_main:
             meta_cols = st.columns(3)
             with meta_cols[0]:
                 st.metric("Total rating", f'{round(details["ratings"].get("total_rating"),0) or "—"}')
-                st.metric("Total rating count", f'{round(details["ratings"].get("total_rating_count"),0) or "—"}')
+                st.metric("Number of total ratings", f'{round(details["ratings"].get("total_rating_count"),0) or "—"}')
             with meta_cols[1]:
                 st.metric("Agg. rating", f'{round(details["ratings"].get("aggregated_rating"),2) or "—"}')
-                st.metric("Agg. rating count", f'{round(details["ratings"].get("aggregated_rating_count"),0) or "—"}')
+                st.metric("Number of agg. ratings", f'{round(details["ratings"].get("aggregated_rating_count"),0) or "—"}')
             with meta_cols[2]:
                 year = pd.to_datetime(details.get("first_release_date"), unit="s", errors="coerce").year
-                st.metric("First release year", year if pd.notna(year) else "—")
+                st.metric("Release year", year if pd.notna(year) else "—")
 
             st.markdown("**Genres:** " + (", ".join(details.get("genres", [])) or "—"))
             st.markdown("**Platforms:** " + (", ".join(details.get("platforms", [])) or "—"))
@@ -219,7 +219,8 @@ with col_side:
                         cols = st.columns([5, 2])
                         with cols[0]:
                             st.markdown(f"**{r['name']}**")
-                            st.caption(f"Similarity: {r['similarity']:.2f}")
+                            # st.caption(f"Similarity: {r['similarity']:.2f}")
+                            st.caption(f"Similarity: {r['similarity'] * 100:.0f}%")
                         with cols[1]:
                             tr = r.get("total_rating")
                             st.metric("Rating", f"{tr:.1f}" if isinstance(tr, (int, float)) else "—")
