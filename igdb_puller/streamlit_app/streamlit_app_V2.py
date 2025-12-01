@@ -1,193 +1,432 @@
-from __future__ import annotations
-import os
-from typing import Optional, Dict, Tuple
+"""
+Streamlit App V2: Games Popularity Explorer with S3-based data.
 
-import pandas as pd
-import streamlit as st
+This version uses pre-processed data from S3 instead of live IGDB API calls.
+Benefits:
+- No API credentials needed for end users
+- Instant search and recommendations
+- Works on Streamlit Community Cloud (no GPU required)
 
-from content_recommender import (
-    build_similarity,
-    top_similar_by_id,
-    top_similar_merlin_by_features,
-    MerlinANN, MerlinConfig,
-    to_query_features,
-)
+=============================================================================
+DEPLOYMENT TO STREAMLIT COMMUNITY CLOUD:
+=============================================================================
 
-# ============================
-# Page config & styles
-# ============================
+1. Push this repo to GitHub
 
-st.set_page_config(page_title="IGDB Game Finder + Recs (Baseline vs Merlin)", layout="wide")
+2. Go to https://share.streamlit.io
 
-CENTERED_CSS = """
-<style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-header {visibility: hidden;}
+3. Click "New app" and select:
+   - Repository: grantstarnes/h501-group6
+   - Branch: main
+   - Main file path: igdb_puller/streamlit_app/streamlit_app_V2.py
 
-div.block-container{
-  padding-top: 1.2rem;
-}
+4. No secrets needed (data is public on S3)
 
-/* center the title + form */
-.title-center { text-align: center; margin-bottom: 0.5rem; }
-.form-wrap { display: flex; justify-content: center; }
-.form-inner { width: min(900px, 95%); }
-</style>
+5. Click "Deploy"
+
+=============================================================================
+LOCAL DEVELOPMENT:
+=============================================================================
+
+To run locally with local data (after running data_pipeline_V2.py):
+    
+    $env:USE_LOCAL_DATA = "true"
+    streamlit run streamlit_app_V2.py
+
+To run locally with S3 data:
+
+    streamlit run streamlit_app_V2.py
+
+=============================================================================
 """
 
-st.markdown(CENTERED_CSS, unsafe_allow_html=True)
+import streamlit as st
+import pandas as pd
+import time
 
-# ============================
-# Data loading
-# ============================
+# Import V2 modules
+from s3_loader_V2 import (
+    load_games,
+    search_games,
+    check_data_availability,
+    get_data_stats,
+)
+from content_recommender_V2 import (
+    get_recommendations,
+    format_recommendation_card,
+    get_game_display_info,
+    get_random_games,
+)
 
-@st.cache_data(show_spinner=False)
-def _load_games_df() -> pd.DataFrame:
-    """
-    Load your master items dataframe used by baseline + Merlin candidates.
-    Expect columns: id, name, genres_lst, plats_lst, numeric cols.
-    Replace below to point to your actual parquet/csv.
-    """
-    # Try common locations
-    for pth in [
-        "games_joined.parquet",
-        "data/games_joined.parquet",
-        "games_joined.csv",
-        "data/games_joined.csv",
-    ]:
-        if os.path.exists(pth):
-            if pth.endswith(".parquet"):
-                return pd.read_parquet(pth)
-            else:
-                return pd.read_csv(pth)
-    return pd.DataFrame(columns=["id","name","genres_lst","plats_lst","total_rating","follows","hypes","normally","completely"])  # empty fallback
+# =============================================================================
+# PAGE CONFIGURATION
+# =============================================================================
+
+st.set_page_config(
+    page_title="🎮 Games Popularity Explorer",
+    page_icon="🎮",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# =============================================================================
+# CUSTOM CSS
+# =============================================================================
+
+st.markdown("""
+<style>
+    /* Main container */
+    .main > div {
+        padding-top: 2rem;
+    }
+    
+    /* Game card styling */
+    .game-card {
+        background-color: #1e1e1e;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+        border: 1px solid #333;
+    }
+    
+    .game-title {
+        font-size: 1.5em;
+        font-weight: bold;
+        color: #ffffff;
+    }
+    
+    .game-meta {
+        color: #888;
+        font-size: 0.9em;
+    }
+    
+    .similarity-badge {
+        background-color: #4CAF50;
+        color: white;
+        padding: 3px 10px;
+        border-radius: 15px;
+        font-size: 0.8em;
+        margin-left: 10px;
+    }
+    
+    .genre-tag {
+        background-color: #2196F3;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 0.75em;
+        margin-right: 5px;
+        display: inline-block;
+        margin-bottom: 3px;
+    }
+    
+    .platform-tag {
+        background-color: #9C27B0;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 0.75em;
+        margin-right: 5px;
+        display: inline-block;
+        margin-bottom: 3px;
+    }
+    
+    .rating-display {
+        font-size: 2em;
+        font-weight: bold;
+        color: #4CAF50;
+    }
+    
+    /* Hide Streamlit branding */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
 
 
-@st.cache_resource(show_spinner=False)
-def _baseline_model(games_df: pd.DataFrame):
-    if games_df.empty:
-        return games_df, None
-    return build_similarity(games_df)
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def display_game_details(game: dict):
+    """Display detailed game information."""
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        st.image(game["cover_url"], width=264)
+        
+        # IGDB link
+        if game.get("url"):
+            st.markdown(f"[View on IGDB]({game['url']})")
+    
+    with col2:
+        st.markdown(f"# {game['name']}")
+        st.markdown(f"**Released:** {game['year']}")
+        
+        # Ratings in columns
+        rating_col1, rating_col2, rating_col3 = st.columns(3)
+        with rating_col1:
+            st.metric("Critics Rating", game["rating"])
+        with rating_col2:
+            st.metric("User Rating", game["total_rating"])
+        with rating_col3:
+            st.metric("Rating Count", f"{game['rating_count']:,}")
+        
+        # Genres
+        if game["genres"]:
+            genre_html = " ".join([f'<span class="genre-tag">{g}</span>' for g in game["genres"]])
+            st.markdown(f"**Genres:** {genre_html}", unsafe_allow_html=True)
+        
+        # Platforms (limit display to avoid clutter)
+        if game["platforms"]:
+            platforms_to_show = game["platforms"][:8]
+            platform_html = " ".join([f'<span class="platform-tag">{p}</span>' for p in platforms_to_show])
+            extra = f" +{len(game['platforms']) - 8} more" if len(game["platforms"]) > 8 else ""
+            st.markdown(f"**Platforms:** {platform_html}{extra}", unsafe_allow_html=True)
+        
+        # Game modes
+        if game["game_modes"]:
+            st.markdown(f"**Game Modes:** {', '.join(game['game_modes'])}")
+        
+        # Stats
+        if game["follows"] > 0 or game["hypes"] > 0:
+            st.markdown(f"**Follows:** {game['follows']:,} | **Hypes:** {game['hypes']:,}")
+    
+    # Summary and storyline
+    st.markdown("---")
+    
+    if game["summary"]:
+        st.markdown("### 📝 Summary")
+        st.markdown(game["summary"])
+    
+    if game["storyline"]:
+        with st.expander("📖 Storyline", expanded=False):
+            st.markdown(game["storyline"])
 
 
-@st.cache_resource(show_spinner=False)
-def _merlin_model() -> Optional[MerlinANN]:
-    try:
-        return MerlinANN(MerlinConfig(art_dir="merlin_artifacts"))
-    except Exception as e:
-        st.warning(f"Merlin not available: {e}")
-        return None
-
-
-# ============================
-# Live search glue (replace with your IGDB functions)
-# ============================
-
-def live_search_game(query: str, games_df: pd.DataFrame) -> Optional[Dict]:
-    """
-    Session-based search: if you have an IGDB live client, replace this with that.
-    For now, we try to find the best local fuzzy-ish match in games_df.
-    """
-    if not query:
-        return None
-    q = query.strip().lower()
-    if games_df.empty:
-        return None
-    # simple contains matching, then fall back to startswith
-    m = games_df[games_df["name"].astype(str).str.lower().str.contains(q, na=False)]
-    if m.empty:
-        m = games_df[games_df["name"].astype(str).str.lower().str.startswith(q, na=False)]
-    if m.empty:
-        return None
-    # take highest rating as tie-breaker
-    m = m.assign(_score=m.get("total_rating", pd.Series([0]*len(m))).fillna(0.0))
-    row = m.sort_values(["_score","follows"], ascending=[False, False]).iloc[0].to_dict()
-    return row
-
-
-# ============================
-# Layout: centered search + sidebar recs
-# ============================
-
-st.markdown("<h1 class='title-center'>🎮 Game Search & Recommendations</h1>", unsafe_allow_html=True)
-
-with st.container():
-    st.markdown("<div class='form-wrap'><div class='form-inner'>", unsafe_allow_html=True)
-    with st.form("search_form", clear_on_submit=False):
-        q = st.text_input("Search a game", key="search_q")
-        col1, col2, col3 = st.columns([1,1,1])
+def display_recommendation_card(rec: dict, index: int):
+    """Display a single recommendation as a card."""
+    with st.container():
+        col1, col2 = st.columns([1, 3])
+        
+        with col1:
+            st.image(rec["cover_url"], width=120)
+        
         with col2:
-            submitted = st.form_submit_button("Search", type="primary")
-    st.markdown("</div></div>", unsafe_allow_html=True)
+            # Title with similarity badge
+            title_html = f'<span class="game-title">{rec["name"]}</span>'
+            if rec["similarity"]:
+                title_html += f' <span class="similarity-badge">{rec["similarity"]} match</span>'
+            st.markdown(title_html, unsafe_allow_html=True)
+            
+            # Meta info
+            st.markdown(f'<span class="game-meta">{rec["year"]} • Rating: {rec["rating"]}</span>', 
+                       unsafe_allow_html=True)
+            
+            # Genres
+            if rec["genres"]:
+                genre_html = " ".join([f'<span class="genre-tag">{g}</span>' for g in rec["genres"]])
+                st.markdown(genre_html, unsafe_allow_html=True)
+            
+            # Summary preview
+            if rec["summary"]:
+                st.caption(rec["summary"])
+        
+        st.markdown("---")
 
-# Sidebar: engine toggle + recs
-with st.sidebar:
-    st.header("Game Recommendations")
-    engine = st.radio("Engine", ["Merlin (learned)", "Baseline (cosine)"])
-    st.caption("Toggle to compare outputs.")
-    rec_area = st.container()
 
-# Load data/models
-G = _load_games_df()
-CLEAN, SIM = _baseline_model(G)
-ANN = _merlin_model() if engine.startswith("Merlin") else None
+# =============================================================================
+# MAIN APPLICATION
+# =============================================================================
 
-# State for last result
-if "last_game" not in st.session_state:
-    st.session_state.last_game = None
-
-# Handle search
-if submitted and q:
-    found = live_search_game(q, G)
-    st.session_state.last_game = found
-
-# Show details
-game = st.session_state.last_game
-
-if not game:
-    st.info("Type a game name above to see details and recommendations.")
-    st.stop()
-
-# Details block (center column)
-left, mid, right = st.columns([1,2,1])
-with mid:
-    st.subheader(game.get("name", "Selected game"))
-    meta_cols = [c for c in ["total_rating","follows","hypes"] if c in game]
-    if meta_cols:
-        st.write({k: game.get(k) for k in meta_cols})
-
-# Compute recommendations
-with rec_area:
-    try:
-        if engine.startswith("Merlin") and ANN is not None:
-            _, recs = top_similar_merlin_by_features(game, ANN, CLEAN, top_n=5)
+def main():
+    # Header
+    st.title("🎮 Games Popularity Explorer")
+    st.markdown("*Search for any game and discover similar titles • Powered by IGDB data*")
+    
+    # Check data availability
+    with st.spinner("Checking data availability..."):
+        availability = check_data_availability()
+    
+    # Show data status in sidebar
+    with st.sidebar:
+        st.markdown("### 📊 Data Status")
+        for name, available in availability.items():
+            status = "✅" if available else "❌"
+            st.markdown(f"{status} {name}")
+        
+        if all(availability.values()):
+            stats = get_data_stats()
+            st.markdown("---")
+            st.markdown("### 📈 Dataset Stats")
+            st.markdown(f"**Total Games:** {stats['total_games']:,}")
+            st.markdown(f"**With Ratings:** {stats['games_with_ratings']:,}")
+            st.markdown(f"**With Covers:** {stats['games_with_covers']:,}")
+    
+    # Check if essential data is available
+    if not availability.get("games", False):
+        st.error("❌ Game data is not available. Please check S3 bucket configuration.")
+        st.info("""
+        **For developers:** 
+        1. Run `data_pipeline_V2.py` to generate processed data files
+        2. Upload the files from `processed_data/` to S3 bucket
+        3. Ensure the S3 bucket has public read access
+        4. Or set `USE_LOCAL_DATA=true` environment variable for local development
+        
+        **S3 Bucket Required Files:**
+        - `games_enriched.parquet`
+        - `recommendations.parquet`
+        - `embeddings.npy` (optional, for real-time recommendations)
+        - `game_id_map.parquet` (optional, for real-time recommendations)
+        """)
+        st.stop()
+    
+    if not availability.get("recommendations", False):
+        st.warning("⚠️ Pre-computed recommendations not available. Only search will work.")
+    
+    # Search section
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns([1, 3, 1])
+    with col2:
+        search_query = st.text_input(
+            "🔍 Search for a game",
+            placeholder="Enter game name (e.g., 'Zelda', 'Final Fantasy', 'Portal')...",
+            key="game_search"
+        )
+    
+    # Session state for selected game
+    if "selected_game_id" not in st.session_state:
+        st.session_state.selected_game_id = None
+    
+    # Search results
+    if search_query:
+        with st.spinner("Searching..."):
+            start_time = time.time()
+            results = search_games(search_query, limit=20)
+            search_time = time.time() - start_time
+        
+        if results.empty:
+            st.warning(f"No games found matching '{search_query}'")
         else:
-            # try baseline by id if we have it, else baseline by fuzzy match id
-            seed_id = int(game.get("id")) if game.get("id") is not None else None
-            if seed_id is None and not G.empty:
-                # map by name
-                m = G[G["name"].astype(str) == game.get("name")]
-                if not m.empty:
-                    seed_id = int(m.iloc[0]["id"])  
-            if seed_id is not None and SIM is not None:
-                _, recs = top_similar_by_id(CLEAN, SIM, seed_id=seed_id, top_n=5)
+            st.success(f"Found {len(results)} games in {search_time*1000:.0f}ms")
+            
+            # Build dropdown options
+            options = []
+            for _, row in results.iterrows():
+                year = row.get("release_year", "")
+                year_str = f" ({int(year)})" if pd.notna(year) else ""
+                rating = row.get("total_rating", 0)
+                rating_str = f" - {rating:.1f}/100" if pd.notna(rating) and rating > 0 else ""
+                options.append({
+                    "id": row["id"],
+                    "label": f"{row['name']}{year_str}{rating_str}"
+                })
+            
+            selected_label = st.selectbox(
+                "Select a game:",
+                options=[o["label"] for o in options],
+                key="game_select"
+            )
+            
+            if selected_label:
+                selected_id = next(o["id"] for o in options if o["label"] == selected_label)
+                st.session_state.selected_game_id = selected_id
+    
+    # Display selected game
+    if st.session_state.selected_game_id:
+        st.markdown("---")
+        
+        # Load game details
+        with st.spinner("Loading game details..."):
+            game_info = get_game_display_info(st.session_state.selected_game_id)
+        
+        if game_info:
+            display_game_details(game_info)
+            
+            # Recommendations section
+            if availability.get("recommendations", False):
+                st.markdown("---")
+                st.markdown("## 🎯 Similar Games You Might Like")
+                
+                # Settings row
+                col1, col2, col3 = st.columns([2, 2, 2])
+                
+                with col1:
+                    num_recs = st.slider("Number of recommendations:", 5, 20, 10)
+                
+                with col2:
+                    # Only show method selector if embeddings are available (for benchmarking)
+                    if availability.get("embeddings", False):
+                        rec_method = st.radio(
+                            "Method:",
+                            ["precomputed", "realtime"],
+                            index=0,
+                            horizontal=True,
+                            help="Compare pre-computed (faster) vs real-time (slower) recommendations"
+                        )
+                    else:
+                        rec_method = "precomputed"
+                
+                # Get recommendations
+                with st.spinner(f"Finding similar games..."):
+                    recommendations, rec_time = get_recommendations(
+                        st.session_state.selected_game_id,
+                        top_n=num_recs,
+                        method=rec_method
+                    )
+                
+                if recommendations.empty:
+                    st.info("No recommendations available for this game.")
+                else:
+                    # Show timing
+                    st.caption(f"Found {len(recommendations)} recommendations in {rec_time*1000:.0f}ms ({rec_method})")
+                    
+                    # Display recommendations in a grid-like layout
+                    for idx, (_, rec_row) in enumerate(recommendations.iterrows()):
+                        rec_card = format_recommendation_card(rec_row)
+                        display_recommendation_card(rec_card, idx)
             else:
-                recs = pd.DataFrame(columns=["id","name","total_rating","follows","similarity"]) 
-    except Exception as e:
-        st.warning(f"Recommendation failed: {e}")
-        recs = pd.DataFrame(columns=["id","name","total_rating","follows","similarity"]) 
+                st.info("💡 Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
+        else:
+            st.error("Could not load game details. Please try another game.")
+    
+    # Featured games section (when no search)
+    elif not search_query:
+        st.markdown("---")
+        st.markdown("### 🌟 Featured Games")
+        st.caption("Here are some highly-rated games to explore:")
+        
+        featured = get_random_games(6)
+        if not featured.empty:
+            cols = st.columns(3)
+            for idx, (_, game) in enumerate(featured.iterrows()):
+                with cols[idx % 3]:
+                    cover_url = game.get("cover_url", "")
+                    if pd.isna(cover_url) or not cover_url:
+                        cover_url = "https://via.placeholder.com/264x374?text=No+Cover"
+                    
+                    st.image(cover_url, width=180)
+                    st.markdown(f"**{game['name']}**")
+                    
+                    rating = game.get("total_rating")
+                    if pd.notna(rating):
+                        st.caption(f"Rating: {rating:.1f}/100")
+                    
+                    # Button to select this game
+                    if st.button(f"View Details", key=f"featured_{game['id']}"):
+                        st.session_state.selected_game_id = game["id"]
+                        st.rerun()
+    
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "<center><small>Data sourced from IGDB • "
+        "Recommendations powered by Sentence Transformers • "
+        "Built with Streamlit</small></center>",
+        unsafe_allow_html=True
+    )
 
-    if recs is None or recs.empty:
-        st.caption("No similar games found.")
-    else:
-        # Compact sidebar list
-        for i, row in recs.head(5).iterrows():
-            st.write(f"**{row.get('name','(unknown)')}**  ")
-            st.caption(f"Score: {row.get('similarity', 0):.3f}  | Rating: {row.get('total_rating', float('nan'))}")
-            st.divider()
 
-# Optional: expanded table in main area
-st.markdown("---")
-st.subheader("Similar Games (table)")
-st.dataframe(recs if recs is not None else pd.DataFrame())
+if __name__ == "__main__":
+    main()
