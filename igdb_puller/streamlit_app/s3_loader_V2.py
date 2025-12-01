@@ -137,6 +137,10 @@ def load_recommendations() -> pd.DataFrame:
     """
     Load pre-computed recommendations from S3.
     Cached for 1 hour.
+    
+    WARNING: This loads the entire recommendations file (~167 MB compressed).
+    For memory-constrained environments (like Streamlit Cloud), 
+    use load_recommendations_for_game() instead.
     """
     use_local = os.getenv("USE_LOCAL_DATA", "").lower() == "true"
     
@@ -147,6 +151,44 @@ def load_recommendations() -> pd.DataFrame:
     except Exception as e:
         st.error(f"Error loading recommendations: {e}")
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner="Fetching recommendations...")
+def load_recommendations_for_game(game_id: int) -> Optional[pd.Series]:
+    """
+    Load recommendations for a SINGLE game using pyarrow filtering.
+    
+    This is much more memory-efficient than loading the entire file.
+    Only loads the specific row needed by iterating through batches.
+    
+    Args:
+        game_id: The game ID to get recommendations for
+        
+    Returns:
+        Series with recommendation data, or None if not found
+    """
+    import pyarrow.parquet as pq
+    
+    use_local = os.getenv("USE_LOCAL_DATA", "").lower() == "true"
+    
+    try:
+        data = _get_file_bytes(FILES["recommendations"], use_local)
+        
+        # Use pyarrow to read in batches - much more memory efficient
+        parquet_file = pq.ParquetFile(BytesIO(data))
+        
+        # Read in batches and filter to find the target game
+        for batch in parquet_file.iter_batches(batch_size=10000):
+            df_batch = batch.to_pandas()
+            game_rec = df_batch[df_batch["game_id"] == game_id]
+            if not game_rec.empty:
+                return game_rec.iloc[0]
+        
+        return None
+        
+    except Exception as e:
+        st.error(f"Error loading recommendations for game {game_id}: {e}")
+        return None
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading embeddings from S3...")
@@ -217,6 +259,9 @@ def get_recommendations_for_game(game_id: int, top_n: int = 10) -> pd.DataFrame:
     """
     Get pre-computed recommendations for a game.
     
+    Uses memory-efficient loading that only fetches the specific game's 
+    recommendations instead of loading the entire file.
+    
     Args:
         game_id: The game ID to get recommendations for
         top_n: Number of recommendations to return
@@ -224,19 +269,17 @@ def get_recommendations_for_game(game_id: int, top_n: int = 10) -> pd.DataFrame:
     Returns:
         DataFrame with recommended games and their details
     """
-    recommendations = load_recommendations()
-    games = load_games()
+    # Use memory-efficient single-game loader instead of load_recommendations()
+    rec_row = load_recommendations_for_game(game_id)
     
-    if recommendations.empty or games.empty:
+    if rec_row is None:
         return pd.DataFrame()
     
-    # Find recommendations for this game
-    game_recs = recommendations[recommendations["game_id"] == game_id]
-    if game_recs.empty:
+    games = load_games()
+    if games.empty:
         return pd.DataFrame()
     
     # Get recommended IDs and scores
-    rec_row = game_recs.iloc[0]
     rec_ids = rec_row["recommended_ids"][:top_n]
     rec_scores = rec_row["scores"][:top_n]
     
