@@ -255,8 +255,9 @@ def main():
             status = "✅" if available else "❌"
             st.markdown(f"{status} {name}")
         
-        if all(availability.values()):
-            stats = get_data_stats()
+        # Only show stats if games data is available (don't require all files)
+        if availability.get("games", False):
+            stats = get_data_stats(include_recommendations=False)  # Don't load recs to save memory
             st.markdown("---")
             st.markdown("### 📈 Dataset Stats")
             st.markdown(f"**Total Games:** {stats['total_games']:,}")

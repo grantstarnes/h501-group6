@@ -331,14 +331,25 @@ def check_data_availability() -> dict[str, bool]:
     return available
 
 
-def get_data_stats() -> dict:
-    """Get statistics about the loaded data."""
-    games = load_games()
-    recs = load_recommendations()
+def get_data_stats(include_recommendations: bool = False) -> dict:
+    """Get statistics about the loaded data.
     
-    return {
+    Args:
+        include_recommendations: If False (default), skip loading recommendations
+                                  to save memory on Streamlit Cloud.
+    """
+    games = load_games()
+    
+    stats = {
         "total_games": len(games) if not games.empty else 0,
         "games_with_ratings": len(games[games["total_rating"].notna()]) if not games.empty else 0,
         "games_with_covers": len(games[games["cover_url"].notna()]) if not games.empty else 0,
-        "total_recommendations": len(recs) if not recs.empty else 0,
+        "total_recommendations": "N/A",
     }
+    
+    # Only load recommendations if explicitly requested (saves memory)
+    if include_recommendations:
+        recs = load_recommendations()
+        stats["total_recommendations"] = len(recs) if not recs.empty else 0
+    
+    return stats
