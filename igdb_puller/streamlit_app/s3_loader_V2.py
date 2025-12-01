@@ -60,15 +60,12 @@ from io import BytesIO
 
 S3_BUCKET = "igdb-streamlitapp-datasets"
 S3_PREFIX = "IGDB/processed/"
-S3_REGION = "us-east-1"  # Change if your bucket is in a different region
+S3_REGION = "us-east-2"  # Change if your bucket is in a different region
 
 # Construct base URL (works for most regions)
 # For us-east-1, the URL format is: https://bucket-name.s3.amazonaws.com/
 # For other regions: https://bucket-name.s3.region.amazonaws.com/
-S3_BASE_URL = f"https://{S3_BUCKET}.s3.amazonaws.com/{S3_PREFIX}"
-
-# Alternative URL format if the above doesn't work:
-# S3_BASE_URL = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{S3_PREFIX}"
+S3_BASE_URL = f"https://{S3_BUCKET}.s3.{S3_REGION}.amazonaws.com/{S3_PREFIX}"
 
 # =============================================================================
 # LOCAL FALLBACK - For development without S3
