@@ -296,9 +296,11 @@ def main():
             key="game_search"
         )
     
-    # Session state for selected game
+    # Session state for selected game and confirmation
     if "selected_game_id" not in st.session_state:
         st.session_state.selected_game_id = None
+    if "confirmed_game_id" not in st.session_state:
+        st.session_state.confirmed_game_id = None
     
     # Search results
     if search_query:
@@ -324,23 +326,36 @@ def main():
                     "label": f"{row['name']}{year_str}{rating_str}"
                 })
             
-            selected_label = st.selectbox(
-                "Select a game:",
-                options=[o["label"] for o in options],
-                key="game_select"
-            )
+            # Two-step selection: dropdown + confirm button
+            col_select, col_button = st.columns([3, 1])
             
-            if selected_label:
-                selected_id = next(o["id"] for o in options if o["label"] == selected_label)
-                st.session_state.selected_game_id = selected_id
+            with col_select:
+                selected_label = st.selectbox(
+                    "Select a game:",
+                    options=[o["label"] for o in options],
+                    key="game_select"
+                )
+            
+            with col_button:
+                st.write("")  # Spacing to align with selectbox
+                if st.button("🎮 View Game", type="primary", use_container_width=True):
+                    if selected_label:
+                        selected_id = next(o["id"] for o in options if o["label"] == selected_label)
+                        st.session_state.selected_game_id = selected_id
+                        st.session_state.confirmed_game_id = selected_id
+                        st.rerun()
+            
+            # Show hint if not confirmed yet
+            if st.session_state.confirmed_game_id is None or st.session_state.confirmed_game_id != st.session_state.selected_game_id:
+                st.info("👆 Select a game from the dropdown and click **View Game** to see details and recommendations.")
     
-    # Display selected game
-    if st.session_state.selected_game_id:
+    # Display selected game only after confirmation (prevents simultaneous search + recommendation load)
+    if st.session_state.confirmed_game_id:
         st.markdown("---")
         
         # Load game details
         with st.spinner("Loading game details..."):
-            game_info = get_game_display_info(st.session_state.selected_game_id)
+            game_info = get_game_display_info(st.session_state.confirmed_game_id)
         
         if game_info:
             display_game_details(game_info)
@@ -372,7 +387,7 @@ def main():
                 # Get recommendations
                 with st.spinner(f"Finding similar games..."):
                     recommendations, rec_time = get_recommendations(
-                        st.session_state.selected_game_id,
+                        st.session_state.confirmed_game_id,
                         top_n=num_recs,
                         method=rec_method
                     )
@@ -417,6 +432,7 @@ def main():
                     # Button to select this game
                     if st.button(f"View Details", key=f"featured_{game['id']}"):
                         st.session_state.selected_game_id = game["id"]
+                        st.session_state.confirmed_game_id = game["id"]
                         st.rerun()
     
     # Footer
