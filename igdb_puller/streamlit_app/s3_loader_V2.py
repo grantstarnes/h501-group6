@@ -7,11 +7,11 @@ This module handles:
 - Fallback to local files for development
 
 =============================================================================
-YOUR INPUT REQUIRED - S3 BUCKET CONFIGURATION:
+S3 BUCKET CONFIGURATION:
 =============================================================================
 
 1. S3 Bucket Name: igdb-streamlitapp-datasets
-   Prefix: IGDB/processed/
+   Prefix: processed/
 
 2. Apply this bucket policy in AWS Console (S3 → Bucket → Permissions → Bucket Policy):
 
@@ -23,7 +23,7 @@ YOUR INPUT REQUIRED - S3 BUCKET CONFIGURATION:
             "Effect": "Allow",
             "Principal": "*",
             "Action": "s3:GetObject",
-            "Resource": "arn:aws:s3:::igdb-streamlitapp-datasets/IGDB/processed/*"
+            "Resource": "arn:aws:s3:::igdb-streamlitapp-datasets/processed/*"
         }
     ]
 }
@@ -35,10 +35,10 @@ YOUR INPUT REQUIRED - S3 BUCKET CONFIGURATION:
    - Save changes
 
 4. Files should be accessible at:
-   https://igdb-streamlitapp-datasets.s3.amazonaws.com/IGDB/processed/games_enriched.parquet
-   https://igdb-streamlitapp-datasets.s3.amazonaws.com/IGDB/processed/recommendations.parquet
-   https://igdb-streamlitapp-datasets.s3.amazonaws.com/IGDB/processed/embeddings.npy
-   https://igdb-streamlitapp-datasets.s3.amazonaws.com/IGDB/processed/game_id_map.parquet
+   https://igdb-streamlitapp-datasets.s3.us-east-2.amazonaws.com/processed/games_enriched.parquet
+   https://igdb-streamlitapp-datasets.s3.us-east-2.amazonaws.com/processed/recommendations.parquet
+   https://igdb-streamlitapp-datasets.s3.us-east-2.amazonaws.com/processed/embeddings.npy
+   https://igdb-streamlitapp-datasets.s3.us-east-2.amazonaws.com/processed/game_id_map.parquet
 
 =============================================================================
 """
@@ -59,7 +59,7 @@ from io import BytesIO
 # =============================================================================
 
 S3_BUCKET = "igdb-streamlitapp-datasets"
-S3_PREFIX = "IGDB/processed/"
+S3_PREFIX = "processed/"  # Changed from "IGDB/processed/" to match actual folder
 S3_REGION = "us-east-2"  # Change if your bucket is in a different region
 
 # Construct base URL (works for most regions)
