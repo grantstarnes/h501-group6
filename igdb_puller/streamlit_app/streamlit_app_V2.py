@@ -244,7 +244,30 @@ def main():
     st.title("🎮 Games Popularity Explorer")
     st.markdown("*Search for any game and discover similar titles • Powered by IGDB data*")
     
-    # Check data availability
+    # =========================================================================
+    # SESSION STATE INITIALIZATION
+    # =========================================================================
+    # Phase control: "search", "search_results", or "details"
+    if "phase" not in st.session_state:
+        st.session_state.phase = "search"
+    
+    # Cached search results (list of dicts to avoid DataFrame copying issues)
+    if "search_results" not in st.session_state:
+        st.session_state.search_results = []
+    
+    # The committed query string for which search_results were generated
+    if "search_query_committed" not in st.session_state:
+        st.session_state.search_query_committed = ""
+    
+    # Selected and confirmed game IDs
+    if "selected_game_id" not in st.session_state:
+        st.session_state.selected_game_id = None
+    if "confirmed_game_id" not in st.session_state:
+        st.session_state.confirmed_game_id = None
+    
+    # =========================================================================
+    # DATA AVAILABILITY CHECK (runs every time, but is lightweight - HEAD requests only)
+    # =========================================================================
     with st.spinner("Checking data availability..."):
         availability = check_data_availability()
     
@@ -263,6 +286,10 @@ def main():
             st.markdown(f"**Total Games:** {stats['total_games']:,}")
             st.markdown(f"**With Ratings:** {stats['games_with_ratings']:,}")
             st.markdown(f"**With Covers:** {stats['games_with_covers']:,}")
+        
+        # Show current phase for debugging (can be removed in production)
+        st.markdown("---")
+        st.markdown(f"**Phase:** `{st.session_state.phase}`")
     
     # Check if essential data is available
     if not availability.get("games", False):
@@ -285,82 +312,121 @@ def main():
     if not availability.get("recommendations", False):
         st.warning("⚠️ Pre-computed recommendations not available. Only search will work.")
     
-    # Search section
+    # =========================================================================
+    # SEARCH SECTION (Phase: "search" or "search_results")
+    # =========================================================================
     st.markdown("---")
     
-    col1, col2, col3 = st.columns([1, 3, 1])
-    with col2:
-        search_query = st.text_input(
-            "🔍 Search for a game",
-            placeholder="Enter game name (e.g., 'Zelda', 'Final Fantasy', 'Portal')...",
-            key="game_search"
-        )
+    # Show search UI in "search" or "search_results" phase
+    if st.session_state.phase in ["search", "search_results"]:
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col2:
+            search_query = st.text_input(
+                "🔍 Search for a game",
+                value=st.session_state.search_query_committed,
+                placeholder="Enter game name (e.g., 'Zelda', 'Final Fantasy', 'Portal')...",
+                key="game_search"
+            )
+            
+            # Search button - ONLY place where search_games() is called
+            if st.button("🔍 Search", type="primary", use_container_width=True):
+                if search_query.strip():
+                    with st.spinner("Searching games..."):
+                        start_time = time.time()
+                        df_results = search_games(search_query.strip(), limit=20)
+                        search_time = time.time() - start_time
+                    
+                    # Store results as list of dicts (memory efficient for session state)
+                    st.session_state.search_results = df_results.to_dict("records")
+                    st.session_state.search_query_committed = search_query.strip()
+                    st.session_state.phase = "search_results"
+                    st.session_state.selected_game_id = None
+                    st.session_state.confirmed_game_id = None
+                    
+                    # Show search timing
+                    if st.session_state.search_results:
+                        st.success(f"Found {len(st.session_state.search_results)} games in {search_time*1000:.0f}ms")
+                    else:
+                        st.warning(f"No games found matching '{search_query.strip()}'")
+                    
+                    st.rerun()
+                else:
+                    st.warning("Please enter a game name to search.")
     
-    # Session state for selected game and confirmation
-    if "selected_game_id" not in st.session_state:
-        st.session_state.selected_game_id = None
-    if "confirmed_game_id" not in st.session_state:
-        st.session_state.confirmed_game_id = None
+    # In "details" phase, show a "New Search" button instead
+    elif st.session_state.phase == "details":
+        col1, col2, col3 = st.columns([1, 3, 1])
+        with col2:
+            st.markdown(f"**Current search:** *{st.session_state.search_query_committed}*")
+            if st.button("🔎 New Search", use_container_width=True):
+                st.session_state.phase = "search"
+                st.session_state.confirmed_game_id = None
+                st.session_state.selected_game_id = None
+                st.session_state.search_results = []
+                st.session_state.search_query_committed = ""
+                st.rerun()
     
-    # Search results
-    if search_query:
-        with st.spinner("Searching..."):
-            start_time = time.time()
-            results = search_games(search_query, limit=20)
-            search_time = time.time() - start_time
+    # =========================================================================
+    # DROPDOWN + VIEW GAME BUTTON (Phase: "search_results" or "details")
+    # This section uses CACHED search results only - NO search_games() calls
+    # =========================================================================
+    if st.session_state.phase in ["search_results", "details"] and st.session_state.search_results:
+        results = st.session_state.search_results
         
-        if results.empty:
-            st.warning(f"No games found matching '{search_query}'")
-        else:
-            st.success(f"Found {len(results)} games in {search_time*1000:.0f}ms")
-            
-            # Build dropdown options
-            options = []
-            for _, row in results.iterrows():
-                year = row.get("release_year", "")
-                year_str = f" ({int(year)})" if pd.notna(year) else ""
-                rating = row.get("total_rating", 0)
-                rating_str = f" - {rating:.1f}/100" if pd.notna(rating) and rating > 0 else ""
-                options.append({
-                    "id": row["id"],
-                    "label": f"{row['name']}{year_str}{rating_str}"
-                })
-            
-            # Two-step selection: dropdown + confirm button
-            col_select, col_button = st.columns([3, 1])
-            
-            with col_select:
-                selected_label = st.selectbox(
-                    "Select a game:",
-                    options=[o["label"] for o in options],
-                    key="game_select"
-                )
-            
-            with col_button:
-                st.write("")  # Spacing to align with selectbox
-                if st.button("🎮 View Game", type="primary", use_container_width=True):
-                    if selected_label:
-                        selected_id = next(o["id"] for o in options if o["label"] == selected_label)
-                        st.session_state.selected_game_id = selected_id
-                        st.session_state.confirmed_game_id = selected_id
-                        st.rerun()
-            
-            # Show hint if not confirmed yet
-            if st.session_state.confirmed_game_id is None or st.session_state.confirmed_game_id != st.session_state.selected_game_id:
-                st.info("👆 Select a game from the dropdown and click **View Game** to see details and recommendations.")
+        # Build dropdown options from cached results
+        options = []
+        for row in results:
+            year = row.get("release_year", "")
+            year_str = f" ({int(year)})" if year and pd.notna(year) else ""
+            rating = row.get("total_rating", 0)
+            rating_str = f" - {rating:.1f}/100" if rating and pd.notna(rating) and rating > 0 else ""
+            options.append({
+                "id": row["id"],
+                "label": f"{row['name']}{year_str}{rating_str}"
+            })
+        
+        st.markdown(f"**{len(options)} games found** for *\"{st.session_state.search_query_committed}\"*")
+        
+        # Two-step selection: dropdown + confirm button
+        col_select, col_button = st.columns([3, 1])
+        
+        with col_select:
+            selected_label = st.selectbox(
+                "Select a game:",
+                options=[o["label"] for o in options],
+                index=0,
+                key="game_select"
+            )
+        
+        with col_button:
+            st.write("")  # Spacing to align with selectbox
+            if st.button("🎮 View Game", type="primary", use_container_width=True):
+                if selected_label:
+                    selected_id = next(o["id"] for o in options if o["label"] == selected_label)
+                    st.session_state.selected_game_id = selected_id
+                    st.session_state.confirmed_game_id = selected_id
+                    st.session_state.phase = "details"
+                    st.rerun()
+        
+        # Show hint if in search_results phase (not yet confirmed)
+        if st.session_state.phase == "search_results":
+            st.info("👆 Select a game from the dropdown and click **View Game** to see details and recommendations.")
     
-    # Display selected game only after confirmation (prevents simultaneous search + recommendation load)
-    if st.session_state.confirmed_game_id:
+    # =========================================================================
+    # DETAILS + RECOMMENDATIONS SECTION (Phase: "details" ONLY)
+    # This is the ONLY place where get_recommendations() is called
+    # =========================================================================
+    if st.session_state.phase == "details" and st.session_state.confirmed_game_id is not None:
         st.markdown("---")
         
-        # Load game details
+        # Load game details (uses cached games df from s3_loader_V2)
         with st.spinner("Loading game details..."):
             game_info = get_game_display_info(st.session_state.confirmed_game_id)
         
         if game_info:
             display_game_details(game_info)
             
-            # Recommendations section
+            # Recommendations section - ONLY runs in "details" phase
             if availability.get("recommendations", False):
                 st.markdown("---")
                 st.markdown("## 🎯 Similar Games You Might Like")
@@ -384,8 +450,8 @@ def main():
                     else:
                         rec_method = "precomputed"
                 
-                # Get recommendations
-                with st.spinner(f"Finding similar games..."):
+                # Get recommendations - THIS IS THE ONLY PLACE THIS RUNS
+                with st.spinner("Finding similar games..."):
                     recommendations, rec_time = get_recommendations(
                         st.session_state.confirmed_game_id,
                         top_n=num_recs,
@@ -407,8 +473,10 @@ def main():
         else:
             st.error("Could not load game details. Please try another game.")
     
-    # Featured games section (when no search)
-    elif not search_query:
+    # =========================================================================
+    # FEATURED GAMES SECTION (Phase: "search" only, when no search has been done)
+    # =========================================================================
+    if st.session_state.phase == "search" and not st.session_state.search_results:
         st.markdown("---")
         st.markdown("### 🌟 Featured Games")
         st.caption("Here are some highly-rated games to explore:")
@@ -429,13 +497,19 @@ def main():
                     if pd.notna(rating):
                         st.caption(f"Rating: {rating:.1f}/100")
                     
-                    # Button to select this game
+                    # Button to select this featured game
                     if st.button(f"View Details", key=f"featured_{game['id']}"):
+                        # For featured games, we create a minimal search result entry
+                        st.session_state.search_results = [game.to_dict()]
+                        st.session_state.search_query_committed = game['name']
                         st.session_state.selected_game_id = game["id"]
                         st.session_state.confirmed_game_id = game["id"]
+                        st.session_state.phase = "details"
                         st.rerun()
     
-    # Footer
+    # =========================================================================
+    # FOOTER
+    # =========================================================================
     st.markdown("---")
     st.markdown(
         "<center><small>Data sourced from IGDB • "
