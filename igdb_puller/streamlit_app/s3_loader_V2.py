@@ -236,6 +236,7 @@ def search_games(query: str, limit: int = 50) -> pd.DataFrame:
     """
     Search games by name.
     Uses simple string matching (case-insensitive).
+    Deduplicates by canonical_game_id to show only one entry per game.
     """
     games = load_games()
     if games.empty or not query:
@@ -247,7 +248,31 @@ def search_games(query: str, limit: int = 50) -> pd.DataFrame:
     mask = games["name"].fillna("").str.lower().str.contains(query_lower, regex=False)
     results = games[mask].copy()
     
-    # Sort by rating count (most popular first)
+    # Deduplicate by canonical_game_id if available
+    if "canonical_game_id" in results.columns and not results.empty:
+        # Sort so earliest release (or highest rating count) comes first per canonical group
+        sort_cols = []
+        ascending = []
+        
+        if "canonical_release_year" in results.columns:
+            sort_cols.append("canonical_release_year")
+            ascending.append(True)
+        if "release_year" in results.columns:
+            sort_cols.append("release_year")
+            ascending.append(True)
+        
+        # Always prefer higher rating count as tiebreaker
+        if "total_rating_count" in results.columns:
+            sort_cols.append("total_rating_count")
+            ascending.append(False)
+        
+        if sort_cols:
+            results = results.sort_values(sort_cols, ascending=ascending, na_position='last')
+        
+        # Keep only the first (earliest/most popular) entry per canonical game
+        results = results.drop_duplicates(subset=["canonical_game_id"], keep="first")
+    
+    # Final sort by rating count (most popular first)
     if "total_rating_count" in results.columns:
         results = results.sort_values("total_rating_count", ascending=False, na_position='last')
     
@@ -261,6 +286,10 @@ def get_recommendations_for_game(game_id: int, top_n: int = 10) -> pd.DataFrame:
     
     Uses memory-efficient loading that only fetches the specific game's 
     recommendations instead of loading the entire file.
+    
+    Filters out:
+    - Games in the same canonical group (same game, different ports/versions)
+    - Duplicate canonical games (shows only one variant per game)
     
     Args:
         game_id: The game ID to get recommendations for
@@ -279,15 +308,22 @@ def get_recommendations_for_game(game_id: int, top_n: int = 10) -> pd.DataFrame:
     if games.empty:
         return pd.DataFrame()
     
-    # Get recommended IDs and scores
-    rec_ids = rec_row["recommended_ids"][:top_n]
-    rec_scores = rec_row["scores"][:top_n]
+    # Get recommended IDs and scores - request more than needed to account for filtering
+    buffer_size = top_n * 3  # Get 3x to account for filtering
+    rec_ids = rec_row["recommended_ids"][:buffer_size]
+    rec_scores = rec_row["scores"][:buffer_size]
     
     # Handle case where rec_ids might be stored as string
     if isinstance(rec_ids, str):
         import ast
-        rec_ids = ast.literal_eval(rec_ids)
-        rec_scores = ast.literal_eval(rec_row["scores"])[:top_n]
+        rec_ids = ast.literal_eval(rec_ids)[:buffer_size]
+        rec_scores = ast.literal_eval(rec_row["scores"])[:buffer_size]
+    
+    # Get the selected game's canonical_game_id
+    selected_row = games[games["id"] == game_id]
+    selected_canonical = None
+    if not selected_row.empty and "canonical_game_id" in games.columns:
+        selected_canonical = selected_row.iloc[0].get("canonical_game_id")
     
     # Get game details for recommended games
     rec_games = games[games["id"].isin(rec_ids)].copy()
@@ -298,7 +334,18 @@ def get_recommendations_for_game(game_id: int, top_n: int = 10) -> pd.DataFrame:
     
     rec_games["similarity_score"] = rec_games["id"].map(id_to_score)
     rec_games["_order"] = rec_games["id"].map(id_to_order)
-    rec_games = rec_games.sort_values("_order").drop(columns=["_order"])
+    
+    # Filter out games in the same canonical group as the selected game
+    if selected_canonical is not None and "canonical_game_id" in rec_games.columns:
+        rec_games = rec_games[rec_games["canonical_game_id"] != selected_canonical]
+    
+    # Deduplicate by canonical_game_id (show only one variant per game)
+    if "canonical_game_id" in rec_games.columns:
+        rec_games = rec_games.sort_values("_order")  # Keep original order priority
+        rec_games = rec_games.drop_duplicates(subset=["canonical_game_id"], keep="first")
+    
+    # Sort by original order and limit to top_n
+    rec_games = rec_games.sort_values("_order").drop(columns=["_order"]).head(top_n)
     
     return rec_games
 

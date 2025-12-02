@@ -43,6 +43,7 @@ To run locally with S3 data:
 import streamlit as st
 import pandas as pd
 import time
+import plotly.express as px
 
 # Import V2 modules
 from s3_loader_V2 import (
@@ -149,7 +150,7 @@ st.markdown("""
 # =============================================================================
 
 def display_game_details(game: dict):
-    """Display detailed game information."""
+    """Display detailed game information with all new fields."""
     col1, col2 = st.columns([1, 2])
     
     with col1:
@@ -162,6 +163,10 @@ def display_game_details(game: dict):
     with col2:
         st.markdown(f"# {game['name']}")
         st.markdown(f"**Released:** {game['year']}")
+        
+        # Age rating (new)
+        if game.get("age_rating") and game["age_rating"] != "N/A":
+            st.markdown(f"**Age Rating:** {game['age_rating']}")
         
         # Ratings in columns
         rating_col1, rating_col2, rating_col3 = st.columns(3)
@@ -188,9 +193,24 @@ def display_game_details(game: dict):
         if game["game_modes"]:
             st.markdown(f"**Game Modes:** {', '.join(game['game_modes'])}")
         
+        # Player perspective (new)
+        if game.get("player_perspectives"):
+            st.markdown(f"**Player Perspective:** {', '.join(game['player_perspectives'])}")
+        
         # Stats
         if game["follows"] > 0 or game["hypes"] > 0:
             st.markdown(f"**Follows:** {game['follows']:,} | **Hypes:** {game['hypes']:,}")
+        
+        # Video links (new)
+        if game.get("videos"):
+            st.markdown("**Videos:**")
+            for url in game["videos"][:2]:
+                st.markdown(f"- [{url}]({url})")
+    
+    # Supported languages expander (new)
+    if game.get("languages"):
+        with st.expander("Supported Languages"):
+            st.markdown(", ".join(sorted(set(game["languages"]))))
     
     # Summary and storyline
     st.markdown("---")
@@ -202,6 +222,30 @@ def display_game_details(game: dict):
     if game["storyline"]:
         with st.expander("Storyline", expanded=False):
             st.markdown(game["storyline"])
+    
+    # Completion time bar chart (new - TTB metrics)
+    ttb_data = []
+    for label, key in [("Hastily", "ttb_hastily"),
+                       ("Normally", "ttb_normally"),
+                       ("Completely", "ttb_completely")]:
+        val = game.get(key)
+        if val is not None:
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                v = None
+            if v is not None and v > 0:
+                ttb_data.append({"Completion Type": label, "Hours": v})
+    
+    if ttb_data:
+        st.markdown("---")
+        st.markdown("### Completion Time")
+        ttb_df = pd.DataFrame(ttb_data)
+        fig = px.bar(ttb_df, x="Completion Type", y="Hours",
+                     labels={"Hours": "Hours to Complete"},
+                     title=None)
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def display_recommendation_card(rec: dict, index: int):
@@ -233,6 +277,75 @@ def display_recommendation_card(rec: dict, index: int):
                 st.caption(rec["summary"])
         
         st.markdown("---")
+
+
+def display_genre_popularity(game: dict):
+    """
+    Display a scatter plot showing popularity of games in the same primary genre by year.
+    Highlights the selected game.
+    """
+    genres = game.get("genres") or []
+    if not genres:
+        return
+    
+    primary_genre = genres[0]  # First genre as primary
+    
+    games_df = load_games()
+    if games_df.empty:
+        return
+    
+    # Filter to games that contain this genre
+    def has_genre(val):
+        if isinstance(val, list):
+            return primary_genre in val
+        if isinstance(val, str):
+            try:
+                import ast
+                lst = ast.literal_eval(val)
+                return primary_genre in lst
+            except Exception:
+                return False
+        return False
+    
+    mask = games_df["genre_names"].apply(has_genre)
+    df = games_df[mask].copy()
+    
+    # Clean up to keep only rows with both release_year and total_rating_count
+    df = df[df["release_year"].notna() & df["total_rating_count"].notna()]
+    if df.empty or len(df) < 5:  # Need enough data points
+        return
+    
+    # Build scatter plot
+    fig = px.scatter(
+        df,
+        x="release_year",
+        y="total_rating_count",
+        opacity=0.35,
+        hover_data=["name"],
+        labels={"release_year": "Year", "total_rating_count": "Rating Count"},
+    )
+    
+    # Highlight selected game
+    selected = df[df["id"] == game["id"]]
+    if not selected.empty:
+        fig.add_scatter(
+            x=selected["release_year"],
+            y=selected["total_rating_count"],
+            mode="markers+text",
+            text=[game["name"]],
+            textposition="top center",
+            marker=dict(size=14, color="red"),
+            name="Selected Game",
+            showlegend=True,
+        )
+    
+    fig.update_layout(
+        title=f"Games in '{primary_genre}' Genre by Year and Popularity",
+        showlegend=True,
+        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # =============================================================================
@@ -471,6 +584,11 @@ def main():
                         display_recommendation_card(rec_card, idx)
             else:
                 st.info("Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
+            
+            # Genre Popularity scatter plot (new)
+            st.markdown("---")
+            st.markdown("### Genre Popularity Over Time")
+            display_genre_popularity(game_info)
         else:
             st.error("Could not load game details. Please try another game.")
     

@@ -97,6 +97,24 @@ def load_all_data() -> dict[str, pd.DataFrame]:
         "keywords": load_csv("df_keywords.csv"),
     }
     
+    # Optional loads - wrapped in try/except to avoid crashing if files are missing
+    optional_files = {
+        "age_ratings": "df_age_rating_full.csv",
+        "age_rating_orgs": "df_age_rating_organizations.csv",
+        "language_supports": "df_language_supports_full.csv",
+        "videos": "df_game_videos_full.csv",
+        "game_time_to_beats": "df_game_time_to_beats_full.csv",
+    }
+    
+    print("\nLoading optional files...")
+    for name, filename in optional_files.items():
+        try:
+            df = load_csv(filename)
+            data[name] = df
+        except Exception as e:
+            print(f"  Warning: Could not load {filename}: {e}")
+            data[name] = pd.DataFrame()
+    
     print("\nLoaded data summary:")
     for name, df in data.items():
         print(f"  {name}: {len(df):,} rows")
@@ -157,6 +175,28 @@ def build_game_mode_mapping(game_modes_df: pd.DataFrame) -> dict[int, str]:
     return dict(zip(game_modes_df["id"], game_modes_df["name"]))
 
 
+def build_player_perspective_mapping(df: pd.DataFrame) -> dict[int, str]:
+    """Build player perspective ID to name mapping."""
+    if df.empty or "id" not in df.columns or "name" not in df.columns:
+        return {}
+    return dict(zip(df["id"], df["name"]))
+
+
+# IGDB language ID to name mapping (common languages)
+# Full list at: https://api-docs.igdb.com/#language
+LANGUAGE_ID_MAP = {
+    1: "Arabic", 2: "Chinese (Simplified)", 3: "Chinese (Traditional)",
+    4: "Czech", 5: "Danish", 6: "Dutch", 7: "English", 8: "Finnish",
+    9: "French", 10: "German", 11: "Greek", 12: "Hebrew", 13: "Hungarian",
+    14: "Italian", 15: "Japanese", 16: "Korean", 17: "Norwegian",
+    18: "Polish", 19: "Portuguese (Brazil)", 20: "Portuguese (Portugal)",
+    21: "Romanian", 22: "Russian", 23: "Spanish (Spain)", 24: "Spanish (Mexico)",
+    25: "Swedish", 26: "Thai", 27: "Turkish", 28: "Ukrainian", 29: "Vietnamese",
+    30: "Catalan", 31: "Bulgarian", 32: "Croatian", 33: "Slovak",
+    34: "Indonesian", 35: "Malay",
+}
+
+
 def enrich_games(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """
     Merge and enrich games data with related information.
@@ -179,10 +219,12 @@ def enrich_games(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     genre_map = build_genre_mapping(data["genres"])
     platform_map = build_platform_mapping(data["platforms"])
     game_mode_map = build_game_mode_mapping(data["game_modes"])
+    player_perspective_map = build_player_perspective_mapping(data["player_perspectives"])
     
     print(f"  Genre mapping: {len(genre_map)} genres")
     print(f"  Platform mapping: {len(platform_map)} platforms")
     print(f"  Game mode mapping: {len(game_mode_map)} game modes")
+    print(f"  Player perspective mapping: {len(player_perspective_map)} perspectives")
     
     # Parse list columns and map to names
     print("  Parsing genres...")
@@ -201,6 +243,13 @@ def enrich_games(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     games["game_mode_ids"] = games.get("game_modes", pd.Series(dtype=object)).apply(parse_list_column)
     games["game_mode_names"] = games["game_mode_ids"].apply(
         lambda ids: [game_mode_map.get(i, f"Unknown({i})") for i in ids if i in game_mode_map]
+    )
+    
+    # Parse player perspectives
+    print("  Parsing player perspectives...")
+    games["player_perspective_ids"] = games.get("player_perspectives", pd.Series(dtype=object)).apply(parse_list_column)
+    games["player_perspective_names"] = games["player_perspective_ids"].apply(
+        lambda ids: [player_perspective_map.get(i, f"Unknown({i})") for i in ids if i in player_perspective_map]
     )
     
     # Add cover URLs
@@ -244,9 +293,138 @@ def enrich_games(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
             games["first_release_date"], unit="s", errors="coerce"
         ).dt.year
     
+    # =========================================================================
+    # AGE RATING
+    # =========================================================================
+    if not data["age_ratings"].empty and "id" in data["age_ratings"].columns:
+        print("  Adding age ratings...")
+        ar = data["age_ratings"].copy()
+        # The rating column already has the label (e.g., "T", "M", "E10+")
+        if "rating" in ar.columns and "organization" in ar.columns:
+            # Build org ID to name mapping
+            org_map = {}
+            if not data.get("age_rating_orgs", pd.DataFrame()).empty:
+                age_orgs = data["age_rating_orgs"]
+                if "id" in age_orgs.columns and "name" in age_orgs.columns:
+                    org_map = dict(zip(age_orgs["id"], age_orgs["name"]))
+            
+            # Create combined label like "ESRB T" or "PEGI 16"
+            ar["org_name"] = ar["organization"].map(org_map).fillna("")
+            ar["age_rating_label"] = ar.apply(
+                lambda row: f"{row['org_name']} {row['rating']}" if row['org_name'] else str(row['rating']),
+                axis=1
+            )
+            ar = ar[["id", "age_rating_label"]].dropna()
+            ar = ar.drop_duplicates(subset=["id"], keep="first")
+            ar = ar.rename(columns={"id": "age_rating_id", "age_rating_label": "age_rating"})
+            
+            # Parse the age_ratings column from games (it contains rating IDs)
+            games["age_rating_ids"] = games.get("age_ratings", pd.Series(dtype=object)).apply(parse_list_column)
+            
+            # Get the first rating for each game (prefer ESRB - org 1)
+            def get_first_age_rating(rating_ids):
+                if not rating_ids:
+                    return None
+                for rid in rating_ids:
+                    if rid in ar["age_rating_id"].values:
+                        return ar[ar["age_rating_id"] == rid]["age_rating"].iloc[0]
+                return None
+            
+            games["age_rating"] = games["age_rating_ids"].apply(get_first_age_rating)
+    
+    # =========================================================================
+    # SUPPORTED LANGUAGES
+    # =========================================================================
+    if not data["language_supports"].empty and "game" in data["language_supports"].columns:
+        print("  Adding language support...")
+        ls = data["language_supports"][["game", "language"]].dropna()
+        ls["language_name"] = ls["language"].map(LANGUAGE_ID_MAP)
+        ls = ls[ls["language_name"].notna()]
+        # Get unique languages per game
+        grouped = ls.groupby("game")["language_name"].apply(lambda x: list(set(x))).reset_index()
+        grouped = grouped.rename(columns={"game": "id", "language_name": "language_names"})
+        games = games.merge(grouped, on="id", how="left")
+    
+    # =========================================================================
+    # TOP 2 VIDEO URLS
+    # =========================================================================
+    if not data["videos"].empty and "game" in data["videos"].columns:
+        print("  Adding video links...")
+        vids = data["videos"].copy()
+        # Build YouTube URLs from video_id
+        if "video_id" in vids.columns:
+            vids["video_url"] = "https://www.youtube.com/watch?v=" + vids["video_id"].astype(str)
+        elif "url" in vids.columns:
+            vids["video_url"] = vids["url"]
+        else:
+            vids["video_url"] = None
+        
+        vids = vids[["game", "video_url"]].dropna()
+        grouped = vids.groupby("game")["video_url"].apply(list).reset_index()
+        grouped = grouped.rename(columns={"game": "id", "video_url": "video_urls"})
+        games = games.merge(grouped, on="id", how="left")
+        
+        # Trim to top 2 videos
+        if "video_urls" in games.columns:
+            games["video_urls"] = games["video_urls"].apply(
+                lambda lst: lst[:2] if isinstance(lst, list) else []
+            )
+    
+    # =========================================================================
+    # CANONICAL/PARENT GAME ID (for deduplication)
+    # =========================================================================
+    print("  Computing canonical game IDs...")
+    if "version_parent" in games.columns:
+        games["canonical_game_id"] = games["version_parent"].fillna(games["id"]).astype(int)
+    elif "parent_game" in games.columns:
+        games["canonical_game_id"] = games["parent_game"].fillna(games["id"]).astype(int)
+    else:
+        games["canonical_game_id"] = games["id"].astype(int)
+    
+    # Compute canonical release year (minimum release year per canonical id)
+    print("  Computing canonical release year...")
+    if "release_year" in games.columns:
+        tmp = games[["canonical_game_id", "release_year"]].dropna()
+        if not tmp.empty:
+            grp = tmp.groupby("canonical_game_id")["release_year"].min().reset_index()
+            grp = grp.rename(columns={"release_year": "canonical_release_year"})
+            games = games.merge(grp, on="canonical_game_id", how="left")
+        else:
+            games["canonical_release_year"] = games.get("release_year")
+    else:
+        games["canonical_release_year"] = None
+    
+    # =========================================================================
+    # TIME-TO-BEAT METRICS
+    # =========================================================================
+    if not data["game_time_to_beats"].empty:
+        print("  Adding time-to-beat metrics...")
+        ttb = data["game_time_to_beats"].copy()
+        
+        # TTB values are in seconds - convert to hours
+        ttb_cols = ["hastily", "normally", "completely"]
+        for col in ttb_cols:
+            if col in ttb.columns:
+                ttb[col] = pd.to_numeric(ttb[col], errors="coerce") / 3600  # seconds to hours
+        
+        # Handle multiple entries per game by taking median
+        if "game_id" in ttb.columns:
+            agg_cols = [c for c in ttb_cols if c in ttb.columns]
+            if agg_cols:
+                ttb = ttb.groupby("game_id")[agg_cols].median().reset_index()
+                ttb = ttb.rename(columns={
+                    "game_id": "id",
+                    "hastily": "ttb_hastily",
+                    "normally": "ttb_normally",
+                    "completely": "ttb_completely",
+                })
+                games = games.merge(ttb, on="id", how="left")
+    
     # Fill NaN values for list columns
     list_columns = ["genre_ids", "genre_names", "platform_ids", "platform_names", 
-                    "game_mode_ids", "game_mode_names", "developer_ids", "publisher_ids"]
+                    "game_mode_ids", "game_mode_names", "developer_ids", "publisher_ids",
+                    "player_perspective_ids", "player_perspective_names",
+                    "language_names", "video_urls"]
     for col in list_columns:
         if col in games.columns:
             games[col] = games[col].apply(lambda x: x if isinstance(x, list) else [])
@@ -480,7 +658,14 @@ def save_artifacts(
         "game_mode_ids", "game_mode_names",
         "developer_ids", "publisher_ids",
         "cover_url", "cover_image_id",
-        "follows", "hypes", "url", "slug"
+        "follows", "hypes", "url", "slug",
+        # New columns added for V2 enrichment
+        "player_perspective_ids", "player_perspective_names",
+        "age_rating",
+        "language_names",
+        "video_urls",
+        "canonical_game_id", "canonical_release_year",
+        "ttb_hastily", "ttb_normally", "ttb_completely",
     ]
     columns_to_save = [c for c in columns_to_keep if c in games.columns]
     

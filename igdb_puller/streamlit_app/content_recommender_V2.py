@@ -99,6 +99,15 @@ def format_recommendation_card(game: pd.Series) -> dict:
 def get_game_display_info(game_id: int) -> Optional[dict]:
     """
     Get full display info for a game.
+    
+    Returns dict with all fields needed for the details page including:
+    - Basic info (name, cover, year, ratings)
+    - Genres, platforms, game modes
+    - Player perspectives
+    - Age rating
+    - Supported languages
+    - Video URLs (top 2)
+    - Time-to-beat metrics
     """
     games = load_games()
     if games.empty:
@@ -125,6 +134,9 @@ def get_game_display_info(game_id: int) -> Optional[dict]:
     genres = parse_list(game.get("genre_names", []))
     platforms = parse_list(game.get("platform_names", []))
     game_modes = parse_list(game.get("game_mode_names", []))
+    player_perspectives = parse_list(game.get("player_perspective_names", []))
+    languages = parse_list(game.get("language_names", []))
+    videos = parse_list(game.get("video_urls", []))
     
     # Cover URL
     cover_url = game.get("cover_url", "")
@@ -148,6 +160,15 @@ def get_game_display_info(game_id: int) -> Optional[dict]:
     if pd.isna(storyline):
         storyline = ""
     
+    # Age rating
+    age_rating = game.get("age_rating", "")
+    age_rating_str = str(age_rating) if pd.notna(age_rating) and age_rating else "N/A"
+    
+    # Time-to-beat metrics
+    ttb_hastily = game.get("ttb_hastily")
+    ttb_normally = game.get("ttb_normally")
+    ttb_completely = game.get("ttb_completely")
+    
     return {
         "id": int(game.get("id", 0)),
         "name": str(game.get("name", "Unknown Game")),
@@ -161,6 +182,13 @@ def get_game_display_info(game_id: int) -> Optional[dict]:
         "genres": genres,
         "platforms": platforms,
         "game_modes": game_modes,
+        "player_perspectives": player_perspectives,
+        "age_rating": age_rating_str,
+        "languages": languages,
+        "videos": videos[:2],  # Top 2 videos (already limited in pipeline, but ensure here)
+        "ttb_hastily": float(ttb_hastily) if pd.notna(ttb_hastily) else None,
+        "ttb_normally": float(ttb_normally) if pd.notna(ttb_normally) else None,
+        "ttb_completely": float(ttb_completely) if pd.notna(ttb_completely) else None,
         "follows": int(game.get("follows", 0)) if pd.notna(game.get("follows")) else 0,
         "hypes": int(game.get("hypes", 0)) if pd.notna(game.get("hypes")) else 0,
         "url": game.get("url", ""),
