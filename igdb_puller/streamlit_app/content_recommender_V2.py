@@ -46,8 +46,13 @@ def format_recommendation_card(game: pd.Series) -> dict:
     
     Returns dict with display-ready values.
     """
-    # Handle list columns (may be stored as lists or strings)
+    # Handle list columns (may be stored as lists, numpy arrays, or strings)
     def parse_list(val):
+        import numpy as np
+        if val is None:
+            return []
+        if isinstance(val, np.ndarray):
+            return val.tolist()
         if isinstance(val, list):
             return val
         if isinstance(val, str):
@@ -119,8 +124,13 @@ def get_game_display_info(game_id: int) -> Optional[dict]:
     
     game = game.iloc[0]
     
-    # Handle list columns
+    # Handle list columns (can be list, numpy array, or string)
     def parse_list(val):
+        import numpy as np
+        if val is None:
+            return []
+        if isinstance(val, np.ndarray):
+            return val.tolist()
         if isinstance(val, list):
             return val
         if isinstance(val, str):
@@ -189,9 +199,9 @@ def get_game_display_info(game_id: int) -> Optional[dict]:
         "ttb_hastily": float(ttb_hastily) if pd.notna(ttb_hastily) else None,
         "ttb_normally": float(ttb_normally) if pd.notna(ttb_normally) else None,
         "ttb_completely": float(ttb_completely) if pd.notna(ttb_completely) else None,
-        "follows": int(game.get("follows", 0)) if pd.notna(game.get("follows")) else 0,
-        "hypes": int(game.get("hypes", 0)) if pd.notna(game.get("hypes")) else 0,
-        "url": game.get("url", ""),
+        "follows": int(game.get("follows", 0)) if pd.notna(game.get("follows", 0)) else 0,
+        "hypes": int(game.get("hypes", 0)) if pd.notna(game.get("hypes", 0)) else 0,
+        "url": game.get("url", "") if pd.notna(game.get("url", "")) else "",
     }
 
 

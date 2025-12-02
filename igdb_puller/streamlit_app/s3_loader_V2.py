@@ -2,7 +2,7 @@
 S3 Data Loader V2: Load pre-processed data from S3 for Streamlit app.
 
 This module handles:
-- Loading parquet files from public S3 bucket
+- Loading parquet files from public S3 bucket (memory-efficient streaming)
 - Caching data in memory for fast access
 - Fallback to local files for development
 
@@ -41,9 +41,18 @@ S3 BUCKET CONFIGURATION:
    https://igdb-streamlitapp-datasets.s3.us-east-2.amazonaws.com/processed/game_id_map.parquet
 
 =============================================================================
+MEMORY OPTIMIZATION:
+=============================================================================
+
+This loader uses fsspec with HTTP filesystem to stream parquet files directly
+from S3 without downloading the entire file into memory first. This avoids
+memory spikes that can crash Streamlit Community Cloud (1GB limit).
+
+=============================================================================
 """
 
 import os
+import gc
 from pathlib import Path
 from typing import Optional
 
@@ -120,13 +129,42 @@ def load_games() -> pd.DataFrame:
     """
     Load the enriched games dataframe from S3.
     Cached for 1 hour.
+    
+    Uses fsspec HTTP streaming for memory efficiency on Streamlit Cloud.
     """
     use_local = os.getenv("USE_LOCAL_DATA", "").lower() == "true"
     
+    # Try local first if requested
+    if use_local:
+        local_path = LOCAL_DATA_DIR / FILES["games"]
+        if local_path.exists():
+            try:
+                df = pd.read_parquet(local_path)
+                return df
+            except Exception as e:
+                st.warning(f"Local file read failed, trying S3: {e}")
+    
+    # Stream from S3 using fsspec (memory-efficient)
+    url = f"{S3_BASE_URL}{FILES['games']}"
     try:
-        data = _get_file_bytes(FILES["games"], use_local)
-        df = pd.read_parquet(BytesIO(data))
+        import fsspec
+        # Use HTTP filesystem to stream parquet without full download
+        with fsspec.open(url, mode='rb') as f:
+            df = pd.read_parquet(f)
+        gc.collect()  # Help free any temporary memory
         return df
+    except ImportError:
+        # Fallback to BytesIO method if fsspec not available
+        st.warning("fsspec not available, using fallback method")
+        try:
+            data = _download_file(FILES["games"])
+            df = pd.read_parquet(BytesIO(data))
+            del data  # Free the bytes immediately
+            gc.collect()
+            return df
+        except Exception as e:
+            st.error(f"Error loading games data: {e}")
+            return pd.DataFrame()
     except Exception as e:
         st.error(f"Error loading games data: {e}")
         return pd.DataFrame()
@@ -141,13 +179,39 @@ def load_recommendations() -> pd.DataFrame:
     WARNING: This loads the entire recommendations file (~167 MB compressed).
     For memory-constrained environments (like Streamlit Cloud), 
     use load_recommendations_for_game() instead.
+    
+    Uses fsspec streaming for better memory efficiency.
     """
     use_local = os.getenv("USE_LOCAL_DATA", "").lower() == "true"
     
+    # Try local first if requested
+    if use_local:
+        local_path = LOCAL_DATA_DIR / FILES["recommendations"]
+        if local_path.exists():
+            try:
+                df = pd.read_parquet(local_path)
+                return df
+            except Exception as e:
+                st.warning(f"Local file read failed, trying S3: {e}")
+    
+    # Stream from S3
+    url = f"{S3_BASE_URL}{FILES['recommendations']}"
     try:
-        data = _get_file_bytes(FILES["recommendations"], use_local)
-        df = pd.read_parquet(BytesIO(data))
+        import fsspec
+        with fsspec.open(url, mode='rb') as f:
+            df = pd.read_parquet(f)
+        gc.collect()
         return df
+    except ImportError:
+        try:
+            data = _download_file(FILES["recommendations"])
+            df = pd.read_parquet(BytesIO(data))
+            del data
+            gc.collect()
+            return df
+        except Exception as e:
+            st.error(f"Error loading recommendations: {e}")
+            return pd.DataFrame()
     except Exception as e:
         st.error(f"Error loading recommendations: {e}")
         return pd.DataFrame()
@@ -160,6 +224,7 @@ def load_recommendations_for_game(game_id: int) -> Optional[pd.Series]:
     
     This is much more memory-efficient than loading the entire file.
     Only loads the specific row needed by iterating through batches.
+    Uses fsspec streaming to avoid downloading entire file.
     
     Args:
         game_id: The game ID to get recommendations for
@@ -171,21 +236,56 @@ def load_recommendations_for_game(game_id: int) -> Optional[pd.Series]:
     
     use_local = os.getenv("USE_LOCAL_DATA", "").lower() == "true"
     
+    # Try local first if requested
+    if use_local:
+        local_path = LOCAL_DATA_DIR / FILES["recommendations"]
+        if local_path.exists():
+            try:
+                parquet_file = pq.ParquetFile(local_path)
+                for batch in parquet_file.iter_batches(batch_size=10000):
+                    df_batch = batch.to_pandas()
+                    game_rec = df_batch[df_batch["game_id"] == game_id]
+                    if not game_rec.empty:
+                        return game_rec.iloc[0]
+                return None
+            except Exception as e:
+                st.warning(f"Local recommendations read failed, trying S3: {e}")
+    
+    # Stream from S3 using fsspec
+    url = f"{S3_BASE_URL}{FILES['recommendations']}"
     try:
-        data = _get_file_bytes(FILES["recommendations"], use_local)
-        
-        # Use pyarrow to read in batches - much more memory efficient
-        parquet_file = pq.ParquetFile(BytesIO(data))
-        
-        # Read in batches and filter to find the target game
-        for batch in parquet_file.iter_batches(batch_size=10000):
-            df_batch = batch.to_pandas()
-            game_rec = df_batch[df_batch["game_id"] == game_id]
-            if not game_rec.empty:
-                return game_rec.iloc[0]
-        
+        import fsspec
+        with fsspec.open(url, mode='rb') as f:
+            parquet_file = pq.ParquetFile(f)
+            # Read in batches and filter to find the target game
+            for batch in parquet_file.iter_batches(batch_size=10000):
+                df_batch = batch.to_pandas()
+                game_rec = df_batch[df_batch["game_id"] == game_id]
+                if not game_rec.empty:
+                    del df_batch
+                    gc.collect()
+                    return game_rec.iloc[0]
+                del df_batch
+            gc.collect()
         return None
-        
+    except ImportError:
+        # Fallback to BytesIO method if fsspec not available
+        try:
+            data = _download_file(FILES["recommendations"])
+            parquet_file = pq.ParquetFile(BytesIO(data))
+            for batch in parquet_file.iter_batches(batch_size=10000):
+                df_batch = batch.to_pandas()
+                game_rec = df_batch[df_batch["game_id"] == game_id]
+                if not game_rec.empty:
+                    del data
+                    gc.collect()
+                    return game_rec.iloc[0]
+            del data
+            gc.collect()
+            return None
+        except Exception as e:
+            st.error(f"Error loading recommendations for game {game_id}: {e}")
+            return None
     except Exception as e:
         st.error(f"Error loading recommendations for game {game_id}: {e}")
         return None
@@ -202,16 +302,49 @@ def load_embeddings() -> tuple[np.ndarray, pd.DataFrame]:
     """
     use_local = os.getenv("USE_LOCAL_DATA", "").lower() == "true"
     
+    # Try local first if requested
+    if use_local:
+        emb_path = LOCAL_DATA_DIR / FILES["embeddings"]
+        map_path = LOCAL_DATA_DIR / FILES["id_map"]
+        if emb_path.exists() and map_path.exists():
+            try:
+                embeddings = np.load(emb_path)
+                id_map = pd.read_parquet(map_path)
+                return embeddings, id_map
+            except Exception as e:
+                st.warning(f"Local embeddings read failed, trying S3: {e}")
+    
+    # Load from S3
     try:
-        # Load embeddings
-        emb_data = _get_file_bytes(FILES["embeddings"], use_local)
+        import fsspec
+        # Load embeddings (numpy files need download, can't stream)
+        emb_url = f"{S3_BASE_URL}{FILES['embeddings']}"
+        emb_data = _download_file(FILES["embeddings"])
         embeddings = np.load(BytesIO(emb_data))
+        del emb_data
+        gc.collect()
         
-        # Load ID map
-        map_data = _get_file_bytes(FILES["id_map"], use_local)
-        id_map = pd.read_parquet(BytesIO(map_data))
+        # Load ID map (parquet can stream)
+        map_url = f"{S3_BASE_URL}{FILES['id_map']}"
+        with fsspec.open(map_url, mode='rb') as f:
+            id_map = pd.read_parquet(f)
         
         return embeddings, id_map
+    except ImportError:
+        try:
+            emb_data = _download_file(FILES["embeddings"])
+            embeddings = np.load(BytesIO(emb_data))
+            del emb_data
+            
+            map_data = _download_file(FILES["id_map"])
+            id_map = pd.read_parquet(BytesIO(map_data))
+            del map_data
+            gc.collect()
+            
+            return embeddings, id_map
+        except Exception as e:
+            st.error(f"Error loading embeddings: {e}")
+            return np.array([]), pd.DataFrame()
     except Exception as e:
         st.error(f"Error loading embeddings: {e}")
         return np.array([]), pd.DataFrame()

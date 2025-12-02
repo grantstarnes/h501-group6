@@ -197,9 +197,16 @@ def display_game_details(game: dict):
         if game.get("player_perspectives"):
             st.markdown(f"**Player Perspective:** {', '.join(game['player_perspectives'])}")
         
-        # Stats
-        if game["follows"] > 0 or game["hypes"] > 0:
-            st.markdown(f"**Follows:** {game['follows']:,} | **Hypes:** {game['hypes']:,}")
+        # Stats (follows may not exist in data, hypes does)
+        follows = game.get("follows", 0) or 0
+        hypes = game.get("hypes", 0) or 0
+        if follows > 0 or hypes > 0:
+            stats_parts = []
+            if follows > 0:
+                stats_parts.append(f"**Follows:** {follows:,}")
+            if hypes > 0:
+                stats_parts.append(f"**Hypes:** {hypes:,}")
+            st.markdown(" | ".join(stats_parts))
         
         # Video links (new)
         if game.get("videos"):
@@ -284,8 +291,11 @@ def display_genre_popularity(game: dict):
     Display a scatter plot showing popularity of games in the same primary genre by year.
     Highlights the selected game.
     """
+    import numpy as np
+    
     genres = game.get("genres") or []
     if not genres:
+        st.caption("No genre data available for this game.")
         return
     
     primary_genre = genres[0]  # First genre as primary
@@ -294,8 +304,10 @@ def display_genre_popularity(game: dict):
     if games_df.empty:
         return
     
-    # Filter to games that contain this genre
+    # Filter to games that contain this genre (handle numpy arrays)
     def has_genre(val):
+        if isinstance(val, np.ndarray):
+            val = val.tolist()
         if isinstance(val, list):
             return primary_genre in val
         if isinstance(val, str):
@@ -313,6 +325,7 @@ def display_genre_popularity(game: dict):
     # Clean up to keep only rows with both release_year and total_rating_count
     df = df[df["release_year"].notna() & df["total_rating_count"].notna()]
     if df.empty or len(df) < 5:  # Need enough data points
+        st.caption(f"Not enough data to show genre popularity chart for '{primary_genre}'.")
         return
     
     # Build scatter plot
