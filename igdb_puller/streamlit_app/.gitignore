@@ -1,6 +1,7 @@
 # Processed data directories (large parquet/npy files)
 processed_data/
 processed_data_backup/
+IGDB/
 
 # Python cache
 __pycache__/
