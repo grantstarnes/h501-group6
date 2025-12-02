@@ -338,8 +338,8 @@ def display_genre_popularity(game: dict):
     # Filter without .copy() - just use boolean indexing
     df = games_df.loc[mask]
     
-    # Clean up to keep only rows with both release_year and total_rating_count
-    df = df[df["release_year"].notna() & df["total_rating_count"].notna()]
+    # Clean up to keep only rows with both release_year and aggregated_rating
+    df = df[df["release_year"].notna() & df["aggregated_rating"].notna()]
     if df.empty or len(df) < 5:  # Need enough data points
         st.caption(f"Not enough data to show genre popularity chart for '{primary_genre}'.")
         return
@@ -348,10 +348,10 @@ def display_genre_popularity(game: dict):
     fig = px.scatter(
         df,
         x="release_year",
-        y="total_rating_count",
+        y="aggregated_rating",
         opacity=0.35,
         hover_data=["name"],
-        labels={"release_year": "Year", "total_rating_count": "Rating Count"},
+        labels={"release_year": "Year", "aggregated_rating": "Aggregated Rating"},
     )
     
     # Highlight selected game
@@ -359,7 +359,7 @@ def display_genre_popularity(game: dict):
     if not selected.empty:
         fig.add_scatter(
             x=selected["release_year"],
-            y=selected["total_rating_count"],
+            y=selected["aggregated_rating"],
             mode="markers+text",
             text=[game["name"]],
             textposition="top center",
@@ -369,7 +369,7 @@ def display_genre_popularity(game: dict):
         )
     
     fig.update_layout(
-        title=f"Games in '{primary_genre}' Genre by Year and Popularity",
+        title=f"Games in '{primary_genre}' Genre by Year and Rating",
         showlegend=True,
         legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
     )
