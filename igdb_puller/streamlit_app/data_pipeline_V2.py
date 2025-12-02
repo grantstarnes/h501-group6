@@ -68,6 +68,10 @@ OUTPUT_DIR = Path(__file__).parent / "processed_data"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # 384 dimensions, fast, good quality
 TOP_N_RECOMMENDATIONS = 50  # Pre-compute top 50 for each game
 
+# Year filter - only include games from this year onwards to reduce file size
+# Set to None to include all games
+MIN_RELEASE_YEAR = 2000
+
 
 def load_csv(filename: str) -> pd.DataFrame:
     """Load a CSV file from the data directory."""
@@ -729,6 +733,17 @@ def main():
     if games.empty:
         print("\nError: Failed to enrich games data")
         return
+    
+    # Filter by release year to reduce file size (for Streamlit Cloud memory limits)
+    if MIN_RELEASE_YEAR is not None:
+        print(f"\nFiltering to games from {MIN_RELEASE_YEAR} onwards...")
+        pre_filter_count = len(games)
+        # Keep only games with release_year >= MIN_RELEASE_YEAR
+        # Exclude games with no release year (mostly low-quality entries with few ratings)
+        games = games[games["release_year"] >= MIN_RELEASE_YEAR].copy()
+        post_filter_count = len(games)
+        print(f"  Filtered from {pre_filter_count:,} to {post_filter_count:,} games")
+        print(f"  Removed {pre_filter_count - post_filter_count:,} games (before {MIN_RELEASE_YEAR} or no year)")
     
     # Reset index for consistent indexing
     games = games.reset_index(drop=True)

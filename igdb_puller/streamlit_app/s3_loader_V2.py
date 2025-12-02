@@ -527,10 +527,15 @@ def compute_realtime_recommendations(game_id: int, top_n: int = 10) -> pd.DataFr
     return rec_games
 
 
+@st.cache_data(ttl=300, show_spinner=False)
 def check_data_availability() -> dict[str, bool]:
     """
     Check which data files are available.
     Returns dict with file availability status.
+    
+    Cached for 5 minutes (ttl=300) to avoid repeated S3 HEAD requests
+    on every Streamlit rerun. The first call hits S3, subsequent calls
+    within the TTL window return instantly from cache.
     """
     use_local = os.getenv("USE_LOCAL_DATA", "").lower() == "true"
     available = {}
