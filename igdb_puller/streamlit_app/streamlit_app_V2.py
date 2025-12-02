@@ -663,10 +663,12 @@ def main():
             st.info("Select a game from the dropdown and click View Game to see details and recommendations.")
     
     # =========================================================================
-    # DETAILS + RECOMMENDATIONS SECTION (Phase: "details" ONLY)
-    # This is the ONLY place where get_recommendations() is called
+    # DETAILS + RECOMMENDATIONS / VISUALIZATIONS SECTION
+    # Phase "details" = details + recommendations (no heavy plots)
+    # Phase "details_visuals" = details + genre plots (no recommendations)
+    # This separation prevents memory crashes on Streamlit Cloud
     # =========================================================================
-    if st.session_state.phase == "details" and st.session_state.confirmed_game_id is not None:
+    if st.session_state.phase in ["details", "details_visuals"] and st.session_state.confirmed_game_id is not None:
         st.markdown("---")
         
         # Load game details (uses cached games df from s3_loader_V2)
@@ -676,47 +678,63 @@ def main():
         if game_info:
             display_game_details(game_info)
             
-            # Recommendations section - ONLY runs in "details" phase
-            if availability.get("recommendations", False):
-                st.markdown("---")
-                st.markdown("## Similar Games You Might Like")
-                
-                # Fixed number of recommendations (5)
-                top_n = 5
-                
-                # Get recommendations - THIS IS THE ONLY PLACE THIS RUNS
-                with st.spinner("Finding similar games..."):
-                    recommendations, rec_time = get_recommendations(
-                        st.session_state.confirmed_game_id,
-                        top_n=top_n,
-                        method="precomputed"
-                    )
-                
-                if recommendations.empty:
-                    st.info("No recommendations available for this game.")
-                else:
-                    # Show timing
-                    st.caption(f"Found {len(recommendations)} recommendations in {rec_time*1000:.0f} ms")
+            # Toggle buttons to switch between recommendations and visualizations
+            st.markdown("---")
+            toggle_col1, toggle_col2 = st.columns([1, 1])
+            
+            with toggle_col1:
+                if st.session_state.phase == "details":
+                    if st.button("📊 Show Visualizations", use_container_width=True):
+                        st.session_state.phase = "details_visuals"
+                        st.rerun()
+                elif st.session_state.phase == "details_visuals":
+                    if st.button("🎮 Back to Recommendations", use_container_width=True):
+                        st.session_state.phase = "details"
+                        st.rerun()
+            
+            # Recommendations section - runs ONLY in "details" phase
+            if st.session_state.phase == "details":
+                if availability.get("recommendations", False):
+                    st.markdown("---")
+                    st.markdown("## Similar Games You Might Like")
                     
-                    # Display recommendations in a grid-like layout
-                    for idx, (_, rec_row) in enumerate(recommendations.iterrows()):
-                        rec_card = format_recommendation_card(rec_row)
-                        display_recommendation_card(rec_card, idx)
-            else:
-                st.info("Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
+                    # Fixed number of recommendations (5)
+                    top_n = 5
+                    
+                    # Get recommendations - THIS IS THE ONLY PLACE THIS RUNS
+                    with st.spinner("Finding similar games..."):
+                        recommendations, rec_time = get_recommendations(
+                            st.session_state.confirmed_game_id,
+                            top_n=top_n,
+                            method="precomputed"
+                        )
+                    
+                    if recommendations.empty:
+                        st.info("No recommendations available for this game.")
+                    else:
+                        # Show timing
+                        st.caption(f"Found {len(recommendations)} recommendations in {rec_time*1000:.0f} ms")
+                        
+                        # Display recommendations in a grid-like layout
+                        for idx, (_, rec_row) in enumerate(recommendations.iterrows()):
+                            rec_card = format_recommendation_card(rec_row)
+                            display_recommendation_card(rec_card, idx)
+                else:
+                    st.info("Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
             
-            # Genre visualizations (3 plots based on selected game's primary genre)
-            st.markdown("---")
-            st.markdown("## Genre Popularity Over Time")
-            plot_genre_scatter(game_info)
-            
-            st.markdown("---")
-            st.markdown("## Rating Distribution in Genre")
-            plot_genre_rating_distribution(game_info)
-            
-            st.markdown("---")
-            st.markdown("## Genre Output Over Time")
-            plot_genre_output_over_time(game_info)
+            # Genre visualizations - run ONLY in "details_visuals" phase
+            if st.session_state.phase == "details_visuals":
+                st.markdown("---")
+                st.markdown("## Genre Popularity Over Time")
+                plot_genre_scatter(game_info)
+                
+                st.markdown("---")
+                st.markdown("## Rating Distribution in Genre")
+                plot_genre_rating_distribution(game_info)
+                
+                st.markdown("---")
+                st.markdown("## Genre Output Over Time")
+                plot_genre_output_over_time(game_info)
         else:
             st.error("Could not load game details. Please try another game.")
     
