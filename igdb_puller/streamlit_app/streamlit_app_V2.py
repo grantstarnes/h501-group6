@@ -286,31 +286,33 @@ def display_recommendation_card(rec: dict, index: int):
         st.markdown("---")
 
 
-def display_genre_popularity(game: dict):
+def get_genre_games_df(game_info: dict) -> tuple:
     """
-    Display a scatter plot showing popularity of games in the same primary genre by year.
-    Highlights the selected game.
+    Return (df, primary_genre) where df contains all games in the selected game's primary genre.
+    Filter to rows with valid release_year and ratings.
+    
+    Returns:
+        tuple: (DataFrame, str) or (None, None) if no data available
     """
     import numpy as np
     
-    genres = game.get("genres") or []
+    games = load_games()
+    if games.empty:
+        return None, None
+
+    genres = game_info.get("genres") or []
     if not genres:
-        st.caption("No genre data available for this game.")
-        return
-    
-    primary_genre = genres[0]  # First genre as primary
-    
-    games_df = load_games()
-    if games_df.empty:
-        return
-    
-    # Filter to games that contain this genre (handle numpy arrays)
+        return None, None
+
+    primary_genre = genres[0]  # first genre as primary
+
     def has_genre(val):
         if isinstance(val, np.ndarray):
             val = val.tolist()
         if isinstance(val, list):
             return primary_genre in val
         if isinstance(val, str):
+            # handle stringified lists if present
             try:
                 import ast
                 lst = ast.literal_eval(val)
@@ -318,46 +320,151 @@ def display_genre_popularity(game: dict):
             except Exception:
                 return False
         return False
-    
-    mask = games_df["genre_names"].apply(has_genre)
-    df = games_df[mask].copy()
-    
-    # Clean up to keep only rows with both release_year and total_rating_count
-    df = df[df["release_year"].notna() & df["total_rating_count"].notna()]
-    if df.empty or len(df) < 5:  # Need enough data points
-        st.caption(f"Not enough data to show genre popularity chart for '{primary_genre}'.")
+
+    if "genre_names" not in games.columns:
+        return None, None
+
+    mask = games["genre_names"].apply(has_genre)
+    df = games[mask].copy()
+
+    # Keep only rows with valid year and aggregated_rating / rating_count
+    if "release_year" in df.columns:
+        df = df[df["release_year"].notna()]
+    if "aggregated_rating" in df.columns:
+        df = df[df["aggregated_rating"].notna()]
+    if "total_rating_count" in df.columns:
+        df["total_rating_count"] = df["total_rating_count"].fillna(0)
+
+    if df.empty:
+        return None, None
+
+    return df, primary_genre
+
+
+def plot_genre_scatter(game_info: dict):
+    """
+    Plot 1: Updated scatter - Year vs Aggregated Rating, size = rating count.
+    Highlights the selected game.
+    """
+    df, primary_genre = get_genre_games_df(game_info)
+    if df is None:
+        st.info("No genre data available for this game.")
         return
-    
-    # Build scatter plot
+
+    # Base scatter: one point per game, same genre
     fig = px.scatter(
         df,
         x="release_year",
-        y="total_rating_count",
-        opacity=0.35,
-        hover_data=["name"],
-        labels={"release_year": "Year", "total_rating_count": "Rating Count"},
+        y="aggregated_rating",
+        size="total_rating_count",
+        hover_data=["name", "release_year", "aggregated_rating", "total_rating_count"],
+        labels={
+            "release_year": "Year",
+            "aggregated_rating": "Aggregated Rating",
+            "total_rating_count": "Rating Count",
+        },
+        title=f"Games in '{primary_genre}' Genre by Year, Rating, and Rating Count",
+        opacity=0.4,
     )
-    
+
     # Highlight selected game
-    selected = df[df["id"] == game["id"]]
-    if not selected.empty:
-        fig.add_scatter(
-            x=selected["release_year"],
-            y=selected["total_rating_count"],
-            mode="markers+text",
-            text=[game["name"]],
-            textposition="top center",
-            marker=dict(size=14, color="red"),
-            name="Selected Game",
-            showlegend=True,
-        )
-    
-    fig.update_layout(
-        title=f"Games in '{primary_genre}' Genre by Year and Popularity",
-        showlegend=True,
-        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
+    selected_id = game_info.get("id")
+    if selected_id is not None and "id" in df.columns:
+        selected = df[df["id"] == selected_id]
+        if not selected.empty:
+            fig.add_scatter(
+                x=selected["release_year"],
+                y=selected["aggregated_rating"],
+                mode="markers+text",
+                text=[game_info["name"]],
+                textposition="top center",
+                marker=dict(size=14, color="red"),
+                name="Selected Game",
+            )
+
+    fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def plot_genre_rating_distribution(game_info: dict):
+    """
+    Plot 2: Rating distribution (histogram) for the genre.
+    Shows a vertical line for the selected game's rating.
+    """
+    df, primary_genre = get_genre_games_df(game_info)
+    if df is None:
+        return
+
+    if "aggregated_rating" not in df.columns:
+        return
+
+    rating_col = "aggregated_rating"
+    fig = px.histogram(
+        df,
+        x=rating_col,
+        nbins=20,
+        labels={rating_col: "Aggregated Rating"},
+        title=f"Rating Distribution in '{primary_genre}' Genre",
     )
+
+    # Add vertical line for selected game's rating
+    # Try to get the rating from game_info (it may be stored as string "XX.X" or float)
+    selected_rating = None
+    rating_val = game_info.get("rating")
+    if rating_val and rating_val != "N/A":
+        try:
+            selected_rating = float(rating_val)
+        except (TypeError, ValueError):
+            pass
     
+    # Fallback to total_rating if rating not available
+    if selected_rating is None:
+        total_rating_val = game_info.get("total_rating")
+        if total_rating_val and total_rating_val != "N/A":
+            try:
+                selected_rating = float(total_rating_val)
+            except (TypeError, ValueError):
+                pass
+
+    if selected_rating is not None:
+        fig.add_vline(
+            x=selected_rating,
+            line_width=2,
+            line_dash="dash",
+            line_color="red",
+            annotation_text=f"{game_info['name']} ({selected_rating:.1f})",
+            annotation_position="top right",
+        )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def plot_genre_output_over_time(game_info: dict):
+    """
+    Plot 3: Genre output over time (bar chart).
+    Shows number of games in the genre released per year.
+    """
+    df, primary_genre = get_genre_games_df(game_info)
+    if df is None:
+        return
+
+    if "release_year" not in df.columns:
+        return
+
+    counts = (
+        df.groupby("release_year")["id"]
+        .count()
+        .reset_index()
+        .rename(columns={"id": "num_games"})
+    )
+
+    fig = px.bar(
+        counts,
+        x="release_year",
+        y="num_games",
+        labels={"release_year": "Year", "num_games": "Number of Games"},
+        title=f"Number of '{primary_genre}' Games Released per Year",
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -598,10 +705,18 @@ def main():
             else:
                 st.info("Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
             
-            # Genre Popularity scatter plot (new)
+            # Genre visualizations (3 plots based on selected game's primary genre)
             st.markdown("---")
-            st.markdown("### Genre Popularity Over Time")
-            display_genre_popularity(game_info)
+            st.markdown("## Genre Popularity Over Time")
+            plot_genre_scatter(game_info)
+            
+            st.markdown("---")
+            st.markdown("## Rating Distribution in Genre")
+            plot_genre_rating_distribution(game_info)
+            
+            st.markdown("---")
+            st.markdown("## Genre Output Over Time")
+            plot_genre_output_over_time(game_info)
         else:
             st.error("Could not load game details. Please try another game.")
     
