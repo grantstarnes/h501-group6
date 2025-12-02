@@ -339,7 +339,13 @@ def get_recommendations_for_game(game_id: int, top_n: int = 5) -> pd.DataFrame:
     recommended_ids = rec_row.get("recommended_ids", [])
     scores = rec_row.get("scores", [])
     
-    if not recommended_ids:
+    # Handle numpy arrays - convert to list and check length
+    if isinstance(recommended_ids, np.ndarray):
+        recommended_ids = recommended_ids.tolist()
+    if isinstance(scores, np.ndarray):
+        scores = scores.tolist()
+    
+    if not recommended_ids or len(recommended_ids) == 0:
         return pd.DataFrame()
     
     # Limit to top_n
