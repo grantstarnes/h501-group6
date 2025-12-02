@@ -1,5 +1,39 @@
-processed_data
-#junk files
+# Processed data directories (large parquet/npy files)
+processed_data/
+processed_data_backup/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
+
+# Junk/old files
 build_merlin_artifacts.py
 content_recommender.py
 igdb_helpers.py
