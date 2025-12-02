@@ -1,8 +1,6 @@
-"""
-Content Recommender V2: Recommendation utilities for Streamlit app.
+"""Content Recommender V2: Recommendation utilities for Streamlit app.
 
-This is a simplified version that works with pre-computed recommendations.
-For Option B (real-time), it also provides similarity computation.
+This version uses pre-computed recommendations only.
 """
 
 import numpy as np
@@ -13,35 +11,30 @@ import time
 # Import S3 loader functions
 from s3_loader_V2 import (
     get_recommendations_for_game,
-    compute_realtime_recommendations,
     load_games
 )
 
 
 def get_recommendations(
     game_id: int, 
-    top_n: int = 10, 
+    top_n: int = 5, 
     method: str = "precomputed"
 ) -> tuple[pd.DataFrame, float]:
     """
-    Get recommendations for a game.
+    Get pre-computed recommendations for a game.
     
     Args:
         game_id: The game ID to get recommendations for
-        top_n: Number of recommendations
-        method: "precomputed" (Option A) or "realtime" (Option B)
+        top_n: Number of recommendations (default 5)
+        method: Ignored, always uses precomputed recommendations
     
     Returns:
         tuple: (recommendations DataFrame, time_taken in seconds)
     """
     start_time = time.time()
     
-    if method == "precomputed":
-        recs = get_recommendations_for_game(game_id, top_n)
-    elif method == "realtime":
-        recs = compute_realtime_recommendations(game_id, top_n)
-    else:
-        raise ValueError(f"Unknown method: {method}. Use 'precomputed' or 'realtime'.")
+    # Always use precomputed recommendations
+    recs = get_recommendations_for_game(game_id, top_n)
     
     elapsed = time.time() - start_time
     return recs, elapsed

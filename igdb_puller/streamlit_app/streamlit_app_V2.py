@@ -63,8 +63,8 @@ from content_recommender_V2 import (
 # =============================================================================
 
 st.set_page_config(
-    page_title="🎮 Games Popularity Explorer",
-    page_icon="🎮",
+    page_title="Everything Games!",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -196,11 +196,11 @@ def display_game_details(game: dict):
     st.markdown("---")
     
     if game["summary"]:
-        st.markdown("### 📝 Summary")
+        st.markdown("### Summary")
         st.markdown(game["summary"])
     
     if game["storyline"]:
-        with st.expander("📖 Storyline", expanded=False):
+        with st.expander("Storyline", expanded=False):
             st.markdown(game["storyline"])
 
 
@@ -220,7 +220,7 @@ def display_recommendation_card(rec: dict, index: int):
             st.markdown(title_html, unsafe_allow_html=True)
             
             # Meta info
-            st.markdown(f'<span class="game-meta">{rec["year"]} • Rating: {rec["rating"]}</span>', 
+            st.markdown(f'<span class="game-meta">{rec["year"]} | Rating: {rec["rating"]}</span>', 
                        unsafe_allow_html=True)
             
             # Genres
@@ -240,10 +240,6 @@ def display_recommendation_card(rec: dict, index: int):
 # =============================================================================
 
 def main():
-    # Header
-    st.title("🎮 Games Popularity Explorer")
-    st.markdown("*Search for any game and discover similar titles • Powered by IGDB data*")
-    
     # =========================================================================
     # SESSION STATE INITIALIZATION
     # =========================================================================
@@ -271,29 +267,52 @@ def main():
     with st.spinner("Checking data availability..."):
         availability = check_data_availability()
     
-    # Show data status in sidebar
+    # =========================================================================
+    # SIDEBAR - Debug toggle only
+    # =========================================================================
     with st.sidebar:
-        st.markdown("### 📊 Data Status")
-        for name, available in availability.items():
-            status = "✅" if available else "❌"
-            st.markdown(f"{status} {name}")
+        debug_mode = st.checkbox("Debug mode", value=False)
         
-        # Only show stats if games data is available (don't require all files)
+        if debug_mode:
+            st.markdown("### Data Status")
+            for name, available in availability.items():
+                status_text = "available" if available else "missing"
+                st.markdown(f"- {name}: {status_text}")
+            
+            current_phase = st.session_state.get("phase", "unknown")
+            st.markdown(f"**Phase:** {current_phase}")
+    
+    # =========================================================================
+    # HEADER - Centered title with stats top-right
+    # =========================================================================
+    st.markdown(
+        "<h1 style='text-align: center;'>Everything Games!</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='text-align: center;'>Search for any game and discover similar titles using precomputed recommendations.</p>",
+        unsafe_allow_html=True,
+    )
+    
+    # Dataset stats in top-right area
+    header_left, header_center, header_right = st.columns([1, 2, 1])
+    with header_right:
         if availability.get("games", False):
-            stats = get_data_stats(include_recommendations=False)  # Don't load recs to save memory
-            st.markdown("---")
-            st.markdown("### 📈 Dataset Stats")
-            st.markdown(f"**Total Games:** {stats['total_games']:,}")
-            st.markdown(f"**With Ratings:** {stats['games_with_ratings']:,}")
-            st.markdown(f"**With Covers:** {stats['games_with_covers']:,}")
-        
-        # Show current phase for debugging (can be removed in production)
-        st.markdown("---")
-        st.markdown(f"**Phase:** `{st.session_state.phase}`")
+            stats = get_data_stats(include_recommendations=False)
+            st.markdown(
+                f"""
+                <div style="text-align: right; font-size: 0.85em; color: #888;">
+                    <div>Total games: {stats['total_games']:,}</div>
+                    <div>With ratings: {stats['games_with_ratings']:,}</div>
+                    <div>With covers: {stats['games_with_covers']:,}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
     
     # Check if essential data is available
     if not availability.get("games", False):
-        st.error("❌ Game data is not available. Please check S3 bucket configuration.")
+        st.error("Game data is not available. Please check S3 bucket configuration.")
         st.info("""
         **For developers:** 
         1. Run `data_pipeline_V2.py` to generate processed data files
@@ -304,13 +323,11 @@ def main():
         **S3 Bucket Required Files:**
         - `games_enriched.parquet`
         - `recommendations.parquet`
-        - `embeddings.npy` (optional, for real-time recommendations)
-        - `game_id_map.parquet` (optional, for real-time recommendations)
         """)
         st.stop()
     
     if not availability.get("recommendations", False):
-        st.warning("⚠️ Pre-computed recommendations not available. Only search will work.")
+        st.warning("Pre-computed recommendations not available. Only search will work.")
     
     # =========================================================================
     # SEARCH SECTION (Phase: "search" or "search_results")
@@ -322,14 +339,14 @@ def main():
         col1, col2, col3 = st.columns([1, 3, 1])
         with col2:
             search_query = st.text_input(
-                "🔍 Search for a game",
+                "Search for a game",
                 value=st.session_state.search_query_committed,
                 placeholder="Enter game name (e.g., 'Zelda', 'Final Fantasy', 'Portal')...",
                 key="game_search"
             )
             
             # Search button - ONLY place where search_games() is called
-            if st.button("🔍 Search", type="primary", use_container_width=True):
+            if st.button("Search", type="primary", use_container_width=True):
                 if search_query.strip():
                     with st.spinner("Searching games..."):
                         start_time = time.time()
@@ -358,7 +375,7 @@ def main():
         col1, col2, col3 = st.columns([1, 3, 1])
         with col2:
             st.markdown(f"**Current search:** *{st.session_state.search_query_committed}*")
-            if st.button("🔎 New Search", use_container_width=True):
+            if st.button("New Search", use_container_width=True):
                 st.session_state.phase = "search"
                 st.session_state.confirmed_game_id = None
                 st.session_state.selected_game_id = None
@@ -400,7 +417,7 @@ def main():
         
         with col_button:
             st.write("")  # Spacing to align with selectbox
-            if st.button("🎮 View Game", type="primary", use_container_width=True):
+            if st.button("View Game", type="primary", use_container_width=True):
                 if selected_label:
                     selected_id = next(o["id"] for o in options if o["label"] == selected_label)
                     st.session_state.selected_game_id = selected_id
@@ -410,7 +427,7 @@ def main():
         
         # Show hint if in search_results phase (not yet confirmed)
         if st.session_state.phase == "search_results":
-            st.info("👆 Select a game from the dropdown and click **View Game** to see details and recommendations.")
+            st.info("Select a game from the dropdown and click View Game to see details and recommendations.")
     
     # =========================================================================
     # DETAILS + RECOMMENDATIONS SECTION (Phase: "details" ONLY)
@@ -429,47 +446,31 @@ def main():
             # Recommendations section - ONLY runs in "details" phase
             if availability.get("recommendations", False):
                 st.markdown("---")
-                st.markdown("## 🎯 Similar Games You Might Like")
+                st.markdown("## Similar Games You Might Like")
                 
-                # Settings row
-                col1, col2, col3 = st.columns([2, 2, 2])
-                
-                with col1:
-                    num_recs = st.slider("Number of recommendations:", 5, 20, 10)
-                
-                with col2:
-                    # Only show method selector if embeddings are available (for benchmarking)
-                    if availability.get("embeddings", False):
-                        rec_method = st.radio(
-                            "Method:",
-                            ["precomputed", "realtime"],
-                            index=0,
-                            horizontal=True,
-                            help="Compare pre-computed (faster) vs real-time (slower) recommendations"
-                        )
-                    else:
-                        rec_method = "precomputed"
+                # Fixed number of recommendations (5)
+                top_n = 5
                 
                 # Get recommendations - THIS IS THE ONLY PLACE THIS RUNS
                 with st.spinner("Finding similar games..."):
                     recommendations, rec_time = get_recommendations(
                         st.session_state.confirmed_game_id,
-                        top_n=num_recs,
-                        method=rec_method
+                        top_n=top_n,
+                        method="precomputed"
                     )
                 
                 if recommendations.empty:
                     st.info("No recommendations available for this game.")
                 else:
                     # Show timing
-                    st.caption(f"Found {len(recommendations)} recommendations in {rec_time*1000:.0f}ms ({rec_method})")
+                    st.caption(f"Found {len(recommendations)} recommendations in {rec_time*1000:.0f} ms")
                     
                     # Display recommendations in a grid-like layout
                     for idx, (_, rec_row) in enumerate(recommendations.iterrows()):
                         rec_card = format_recommendation_card(rec_row)
                         display_recommendation_card(rec_card, idx)
             else:
-                st.info("💡 Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
+                st.info("Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
         else:
             st.error("Could not load game details. Please try another game.")
     
@@ -478,7 +479,7 @@ def main():
     # =========================================================================
     if st.session_state.phase == "search" and not st.session_state.search_results:
         st.markdown("---")
-        st.markdown("### 🌟 Featured Games")
+        st.markdown("### Featured Games")
         st.caption("Here are some highly-rated games to explore:")
         
         featured = get_random_games(6)
@@ -497,8 +498,8 @@ def main():
                     if pd.notna(rating):
                         st.caption(f"Rating: {rating:.1f}/100")
                     
-                    # Button to select this featured game
-                    if st.button(f"View Details", key=f"featured_{game['id']}"):
+                    # Button to select this featured game - sets phase to details
+                    if st.button("View Details", key=f"featured_{game['id']}"):
                         # For featured games, we create a minimal search result entry
                         st.session_state.search_results = [game.to_dict()]
                         st.session_state.search_query_committed = game['name']
@@ -512,8 +513,8 @@ def main():
     # =========================================================================
     st.markdown("---")
     st.markdown(
-        "<center><small>Data sourced from IGDB • "
-        "Recommendations powered by Sentence Transformers • "
+        "<center><small>Data sourced from IGDB | "
+        "Recommendations powered by Sentence Transformers | "
         "Built with Streamlit</small></center>",
         unsafe_allow_html=True
     )
