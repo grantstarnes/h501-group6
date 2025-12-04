@@ -9,6 +9,7 @@ import re
 import numpy as np
 import pandas as pd
 from requests import HTTPError
+import os
 
 from .client import IGDBClient
 from .exporter import CSVExporter, NDJSONExporter, ParquetExporter
@@ -246,6 +247,7 @@ def pull_games_and_dependents(
     target_ns: Optional[dict] = None,
     max_games: Optional[int] = None,
     verbose: bool = True,
+    output_location: Optional[str] = None,
 ):
     """
     One-call loader:
@@ -269,7 +271,7 @@ def pull_games_and_dependents(
         # fields_map = {"games": fields}
         where_map = {"games": where_games} if where_games else None
         max_rows_map = {"games": max_games} if max_games else None
-        pull_tables_as_globals(["games"],  where_map=where_map,max_rows_map=max_rows_map,
+        pull_tables_as_globals(["games"],  where_map= where_map,max_rows_map=max_rows_map,
                                 target_ns=target_ns, verbose=verbose)
 
     df_games = target_ns["df_games"]
@@ -307,14 +309,26 @@ def pull_games_and_dependents(
             if not ids:
                 continue
             fk = spec["filter"]  # e.g., "company", "platform", or "id"
-        _pull_fk_batches(
-            [endpoint],
-            fk_col=fk,
-            ids=ids,
-            batch_size=batch_size,       # adaptive shrink will handle 400/413
-            target_ns=target_ns,
-            verbose=verbose,
-        )
+            _pull_fk_batches(
+                [endpoint],
+                fk_col=fk,
+                ids=ids,
+                batch_size=batch_size,       # adaptive shrink will handle 400/413
+                target_ns=target_ns,
+                verbose=verbose,
+            )
+
+    # Save all pulled tables as CSVs if output_location is specified
+    if output_location is not None:
+        ts = datetime.now().strftime("%Y%m%d")
+        os.makedirs(output_location, exist_ok=True)
+        for var_name, df in target_ns.items():
+            if var_name.startswith("df_") and hasattr(df, "to_csv"):
+                table_name = var_name[3:]
+                out_path = os.path.join(output_location, f"IGDB_{ts}_{table_name}.csv")
+                df.to_csv(out_path, index=False)
+                if verbose:
+                    print(f"Saved {var_name} to {out_path}")
 
     if verbose:
         print("Done pulling games and dependents.")
