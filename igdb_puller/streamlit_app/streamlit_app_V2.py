@@ -52,12 +52,13 @@ from s3_loader_V2 import (
     check_data_availability,
     get_data_stats,
 )
-from content_recommender_V2 import (
+from content_recommender_V3 import (
     get_recommendations,
     format_recommendation_card,
     get_game_display_info,
     get_random_games,
 )
+
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -80,36 +81,35 @@ st.markdown("""
     .main > div {
         padding-top: 2rem;
     }
-    
+
     /* Game card styling */
     .game-card {
         background-color: #1e1e1e;
         border-radius: 10px;
         padding: 15px;
         margin: 10px 0;
-        border: 1px solid #333;
+        border: 1px solid #333333;
     }
-    
+
     .game-title {
         font-size: 1.5em;
         font-weight: bold;
-        color: #ffffff;
+        color: #ffffff;  /* white title text for dark background */
     }
-    
+
     .game-meta {
-        color: #888;
+        color: #888888;
         font-size: 0.9em;
     }
-    
+
     .similarity-badge {
-        background-color: #4CAF50;
-        color: white;
         padding: 3px 10px;
         border-radius: 15px;
         font-size: 0.8em;
         margin-left: 10px;
+        color: white;
     }
-    
+
     .genre-tag {
         background-color: #2196F3;
         color: white;
@@ -120,7 +120,7 @@ st.markdown("""
         display: inline-block;
         margin-bottom: 3px;
     }
-    
+
     .platform-tag {
         background-color: #9C27B0;
         color: white;
@@ -131,18 +131,18 @@ st.markdown("""
         display: inline-block;
         margin-bottom: 3px;
     }
-    
+
     .rating-display {
         font-size: 2em;
         font-weight: bold;
         color: #4CAF50;
     }
-    
-    /* Hide Streamlit branding */
+
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
+
 
 
 # =============================================================================
@@ -259,31 +259,53 @@ def display_recommendation_card(rec: dict, index: int):
     """Display a single recommendation as a card."""
     with st.container():
         col1, col2 = st.columns([1, 3])
-        
+
         with col1:
             st.image(rec["cover_url"], width=120)
-        
+
         with col2:
-            # Title with similarity badge
+            # Color-coded similarity badge
+            sim = rec.get("similarity", "")
+            color = "#888888"
+            try:
+                value = float(sim.replace("%", ""))
+                if value >= 70:
+                    color = "#4CAF50"   # green
+                elif value >= 40:
+                    color = "#FF9800"   # orange
+                else:
+                    color = "#F44336"   # red
+            except Exception:
+                pass
+
+            # Title with badge
             title_html = f'<span class="game-title">{rec["name"]}</span>'
-            if rec["similarity"]:
-                title_html += f' <span class="similarity-badge">{rec["similarity"]} match</span>'
+            if sim:
+                title_html += (
+                    f' <span class="similarity-badge" '
+                    f'style="background-color:{color};">{sim} match</span>'
+                )
             st.markdown(title_html, unsafe_allow_html=True)
-            
+
             # Meta info
-            st.markdown(f'<span class="game-meta">{rec["year"]} | Rating: {rec["rating"]}</span>', 
-                       unsafe_allow_html=True)
-            
+            st.markdown(
+                f'<span class="game-meta">{rec["year"]} | Rating: {rec["rating"]}</span>',
+                unsafe_allow_html=True,
+            )
+
             # Genres
             if rec["genres"]:
-                genre_html = " ".join([f'<span class="genre-tag">{g}</span>' for g in rec["genres"]])
+                genre_html = " ".join(
+                    f'<span class="genre-tag">{g}</span>' for g in rec["genres"]
+                )
                 st.markdown(genre_html, unsafe_allow_html=True)
-            
+
             # Summary preview
             if rec["summary"]:
                 st.caption(rec["summary"])
-        
+
         st.markdown("---")
+
 
 
 def get_genre_games_df(game_info: dict) -> tuple:
@@ -465,6 +487,135 @@ def plot_genre_output_over_time(game_info: dict):
         labels={"release_year": "Year", "num_games": "Number of Games"},
         title=f"Number of '{primary_genre}' Games Released per Year",
     )
+    st.plotly_chart(fig, use_container_width=True)
+
+def plot_game_vs_genre_radar(game_info: dict):
+    """
+    Dark-mode radar chart comparing the selected game to its primary genre average.
+    Metrics: Critic/User rating, rating count, hypes, follows (when available).
+    """
+    import numpy as np
+    import pandas as pd
+    import plotly.graph_objects as go
+
+    df, primary_genre = get_genre_games_df(game_info)
+    if df is None:
+        st.info("No genre data available for this game.")
+        return
+
+    if "id" not in df.columns:
+        st.info("No game ID information available for radar chart.")
+        return
+
+    selected_id = game_info.get("id")
+    selected_rows = df[df["id"] == selected_id]
+    if selected_rows.empty:
+        st.info("Could not locate this game in the genre dataset.")
+        return
+
+    selected = selected_rows.iloc[0]
+
+    # Candidate metrics: (label, possible column names)
+    metric_candidates = [
+        ("Critic Rating", ["aggregated_rating", "rating", "total_rating"]),
+        ("User Rating", ["total_rating"]),
+        ("Rating Count", ["total_rating_count", "rating_count"]),
+        ("Hypes", ["hypes"]),
+        ("Follows", ["follows"]),
+    ]
+
+    labels = []
+    selected_values = []
+    genre_values = []
+
+    for label, col_options in metric_candidates:
+        col = next((c for c in col_options if c in df.columns), None)
+        if col is None:
+            continue
+
+        series = pd.to_numeric(df[col], errors="coerce")
+        series = series.replace([np.inf, -np.inf], np.nan).dropna()
+        if series.empty:
+            continue
+
+        val_sel = pd.to_numeric(pd.Series([selected.get(col)]), errors="coerce").iloc[0]
+        if pd.isna(val_sel):
+            continue
+
+        min_v = series.min()
+        max_v = series.max()
+        mean_v = series.mean()
+
+        if max_v == min_v:
+            sel_norm = 1.0
+            mean_norm = 1.0
+        else:
+            sel_norm = (val_sel - min_v) / (max_v - min_v)
+            mean_norm = (mean_v - min_v) / (max_v - min_v)
+
+        labels.append(label)
+        selected_values.append(float(sel_norm))
+        genre_values.append(float(mean_norm))
+
+    if not labels:
+        st.info("No numeric metrics available for radar chart.")
+        return
+
+    # Close polygon
+    if len(labels) == 1:
+        labels_closed = labels * 2
+        selected_closed = selected_values * 2
+        genre_closed = genre_values * 2
+    else:
+        labels_closed = labels + [labels[0]]
+        selected_closed = selected_values + [selected_values[0]]
+        genre_closed = genre_values + [genre_values[0]]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatterpolar(
+        r=selected_closed,
+        theta=labels_closed,
+        fill="toself",
+        fillcolor="rgba(0,229,255,0.25)",   # cyan fill
+        line=dict(color="#00E5FF", width=3),
+        name=game_info["name"],
+    ))
+
+    fig.add_trace(go.Scatterpolar(
+        r=genre_closed,
+        theta=labels_closed,
+        fill="toself",
+        fillcolor="rgba(255,183,77,0.22)",  # amber fill
+        line=dict(color="#FFB74D", width=3),
+        name=f"{primary_genre} Avg",
+    ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        title={
+            "text": f"{game_info['name']} vs '{primary_genre}' Genre Averages",
+            "font": {"size": 24, "color": "#FFFFFF"},
+            "x": 0.5,
+        },
+        font=dict(color="#FFFFFF"),
+        polar=dict(
+            domain=dict(x=[0, 1], y=[0, 1]),
+            radialaxis=dict(
+                range=[0, 1],
+                tickfont=dict(size=14, color="#FFFFFF"),
+            ),
+            angularaxis=dict(
+                tickfont=dict(size=16, color="#FFFFFF"),
+            ),
+        ),
+        showlegend=True,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=40, r=40, t=80, b=40),
+        height=550,
+    )
+
     st.plotly_chart(fig, use_container_width=True)
 
 
@@ -724,17 +875,21 @@ def main():
             
             # Genre visualizations - run ONLY in "details_visuals" phase
             if st.session_state.phase == "details_visuals":
+                st.markdown("## How This Game Compares to Its Genre")
+                plot_game_vs_genre_radar(game_info)   # ← NEW RADAR CHART HERE
+
                 st.markdown("---")
                 st.markdown("## Genre Popularity Over Time")
                 plot_genre_scatter(game_info)
-                
+
                 st.markdown("---")
                 st.markdown("## Rating Distribution in Genre")
                 plot_genre_rating_distribution(game_info)
-                
+
                 st.markdown("---")
                 st.markdown("## Genre Output Over Time")
                 plot_genre_output_over_time(game_info)
+
         else:
             st.error("Could not load game details. Please try another game.")
     
