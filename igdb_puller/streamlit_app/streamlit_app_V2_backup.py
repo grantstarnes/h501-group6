@@ -30,7 +30,7 @@ DEPLOYMENT TO STREAMLIT COMMUNITY CLOUD:
 
 3. Click "New app" and select:
    - Repository: grantstarnes/h501-group6
-   - Branch: raj
+   - Branch: Woods
    - Main file path: igdb_puller/streamlit_app/streamlit_app_V2_backup.py
 
 4. No secrets needed (data is public on S3)
