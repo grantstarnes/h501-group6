@@ -299,82 +299,63 @@ def display_recommendation_card(rec: dict, index: int):
         st.markdown("---")
 
 
-def display_genre_popularity(game: dict):
+def display_top_games_by_rating():
     """
-    Display a scatter plot showing popularity of games in the same primary genre by year.
-    Highlights the selected game.
-    
-    MEMORY OPTIMIZED: Uses vectorized operations instead of .apply() and avoids .copy()
+    Display the top-rated games by year using the top_games_visualization module.
+    Shows the highest-rated game released in each year with interactive Plotly chart.
     """
-    import numpy as np
+    from top_games_visualization import (
+        prepare_top_games_data,
+        get_top_games_by_year,
+        plot_top_games_by_rating,
+        get_top_games_table,
+    )
     
-    genres = game.get("genres") or []
-    if not genres:
-        st.caption("No genre data available for this game.")
-        return
-    
-    primary_genre = genres[0]  # First genre as primary
-    
+    # Load games data (same as other operations in the app)
     games_df = load_games()
     if games_df.empty:
+        st.error("Unable to load games data.")
         return
     
-    # OPTIMIZED: Vectorized genre check without .apply() or .copy()
-    # This is much faster and uses less memory
-    genre_col = games_df["genre_names"]
-    
-    # Build mask using vectorized string contains (works for list-as-string format)
-    # For actual lists/arrays, we need to check element-wise
-    mask = pd.Series([False] * len(games_df), index=games_df.index)
-    
-    for idx, val in enumerate(genre_col):
-        if isinstance(val, (list, np.ndarray)):
-            if isinstance(val, np.ndarray):
-                val = val.tolist()
-            mask.iloc[idx] = primary_genre in val
-        elif isinstance(val, str) and primary_genre in val:
-            mask.iloc[idx] = True
-    
-    # Filter without .copy() - just use boolean indexing
-    df = games_df.loc[mask]
-    
-    # Clean up to keep only rows with both release_year and aggregated_rating
-    df = df[df["release_year"].notna() & df["aggregated_rating"].notna()]
-    if df.empty or len(df) < 5:  # Need enough data points
-        st.caption(f"Not enough data to show genre popularity chart for '{primary_genre}'.")
+    # Prepare data for analysis
+    cleaned_df = prepare_top_games_data(games_df, min_year=1998)
+    if cleaned_df.empty:
+        st.warning("No valid data available for top games analysis.")
         return
     
-    # Build scatter plot
-    fig = px.scatter(
-        df,
-        x="release_year",
-        y="aggregated_rating",
-        opacity=0.35,
-        hover_data=["name"],
-        labels={"release_year": "Year", "aggregated_rating": "Aggregated Rating"},
+    # Get top-rated game per year
+    top_games = get_top_games_by_year(cleaned_df)
+    if top_games.empty:
+        st.warning("Unable to calculate top games by year.")
+        return
+    
+    # Display statistics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Years Tracked", len(top_games))
+    with col2:
+        st.metric("Highest Rating", f"{top_games['aggregated_rating'].max():.1f}")
+    with col3:
+        st.metric("Lowest Rating", f"{top_games['aggregated_rating'].min():.1f}")
+    with col4:
+        avg_rating = top_games['aggregated_rating'].mean()
+        st.metric("Average Rating", f"{avg_rating:.1f}")
+    
+    # Display interactive chart
+    st.markdown("### Ratings Trend by Year")
+    fig = plot_top_games_by_rating(
+        top_games,
+        height=600,
+        show_labels=True,
+        label_top_n=3,
+        colormap='viridis'
     )
-    
-    # Highlight selected game
-    selected = df[df["id"] == game["id"]]
-    if not selected.empty:
-        fig.add_scatter(
-            x=selected["release_year"],
-            y=selected["aggregated_rating"],
-            mode="markers+text",
-            text=[game["name"]],
-            textposition="top center",
-            marker=dict(size=14, color="red"),
-            name="Selected Game",
-            showlegend=True,
-        )
-    
-    fig.update_layout(
-        title=f"Games in '{primary_genre}' Genre by Year and Rating",
-        showlegend=True,
-        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
-    )
-    
     st.plotly_chart(fig, use_container_width=True)
+    
+    # Display top 15 games table
+    st.markdown("### Top Games by Rating")
+    table_df = get_top_games_table(top_games, top_n=15)
+    st.dataframe(table_df, use_container_width=True)
 
 
 # =============================================================================
@@ -404,8 +385,8 @@ def main():
         st.session_state.confirmed_game_id = None
     
     # Chart visibility toggle (to avoid loading chart + recommendations together)
-    if "show_genre_chart" not in st.session_state:
-        st.session_state.show_genre_chart = False
+    if "show_top_games_chart" not in st.session_state:
+        st.session_state.show_top_games_chart = False
     
     # =========================================================================
     # DATA AVAILABILITY CHECK (runs every time, but is lightweight - HEAD requests only)
@@ -634,8 +615,8 @@ def main():
                     st.session_state.show_genre_chart = False
                     st.rerun()
                 
-                st.markdown("### Genre Popularity Over Time")
-                display_genre_popularity(game_info)
+                st.markdown("### Top-Rated Games by Year")
+                display_top_games_by_rating()
         else:
             st.error("Could not load game details. Please try another game.")
     
