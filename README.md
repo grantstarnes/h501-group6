@@ -14,3 +14,5 @@ Tools Used:
   - GitHub: The cloud-based, centralized hub for the team to share everyone's code in the same space, so we stay up to date on everyone's progress.
 
 Ethical Concerns: Our code raises a few ethical concerns. One example of evaluation bias was during the data cleaning process, the "age_rating" column was removed, which is the European rating system for video games. While the argument for removing this column was to keep the ratings US-based, since most hypothetical users are from the US, we are completely dismissing another way to evaluate video games that could potentially strengthen our analysis and app credibility. In the future, we will conduct the same analysis and create separate visuals/results for the US and European ratings. In other words, do not drop the "age_rating" column.
+
+Link to Web App: https://h501-group6-q2kcnkcl226chprw7ce8qn.streamlit.app/
