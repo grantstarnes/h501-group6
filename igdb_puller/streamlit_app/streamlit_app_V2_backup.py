@@ -30,7 +30,7 @@ DEPLOYMENT TO STREAMLIT COMMUNITY CLOUD:
 
 3. Click "New app" and select:
    - Repository: grantstarnes/h501-group6
-   - Branch: Woods
+   - Branch: raj
    - Main file path: igdb_puller/streamlit_app/streamlit_app_V2_backup.py
 
 4. No secrets needed (data is public on S3)
@@ -299,63 +299,153 @@ def display_recommendation_card(rec: dict, index: int):
         st.markdown("---")
 
 
-def display_top_games_by_rating():
+def display_genre_popularity(game: dict):
     """
-    Display the top-rated games by year using the top_games_visualization module.
-    Shows the highest-rated game released in each year with interactive Plotly chart.
-    """
-    from top_games_visualization import (
-        prepare_top_games_data,
-        get_top_games_by_year,
-        plot_top_games_by_rating,
-        get_top_games_table,
-    )
+    Display a scatter plot showing popularity of games in the same primary genre by year.
+    Highlights the selected game.
     
-    # Load games data (same as other operations in the app)
+    MEMORY OPTIMIZED: Uses vectorized operations instead of .apply() and avoids .copy()
+    """
+    import numpy as np
+    
+    genres = game.get("genres") or []
+    if not genres:
+        st.caption("No genre data available for this game.")
+        return
+    
+    primary_genre = genres[0]  # First genre as primary
+    
     games_df = load_games()
     if games_df.empty:
-        st.error("Unable to load games data.")
         return
     
-    # Prepare data for analysis
-    cleaned_df = prepare_top_games_data(games_df, min_year=1998)
-    if cleaned_df.empty:
-        st.warning("No valid data available for top games analysis.")
+    # OPTIMIZED: Vectorized genre check without .apply() or .copy()
+    # This is much faster and uses less memory
+    genre_col = games_df["genre_names"]
+    
+    # Build mask using vectorized string contains (works for list-as-string format)
+    # For actual lists/arrays, we need to check element-wise
+    mask = pd.Series([False] * len(games_df), index=games_df.index)
+    
+    for idx, val in enumerate(genre_col):
+        if isinstance(val, (list, np.ndarray)):
+            if isinstance(val, np.ndarray):
+                val = val.tolist()
+            mask.iloc[idx] = primary_genre in val
+        elif isinstance(val, str) and primary_genre in val:
+            mask.iloc[idx] = True
+    
+    # Filter without .copy() - just use boolean indexing
+    df = games_df.loc[mask]
+    
+    # Clean up to keep only rows with both release_year and aggregated_rating
+    df = df[df["release_year"].notna() & df["aggregated_rating"].notna()]
+    if df.empty or len(df) < 5:  # Need enough data points
+        st.caption(f"Not enough data to show genre popularity chart for '{primary_genre}'.")
         return
     
-    # Get top-rated game per year
-    top_games = get_top_games_by_year(cleaned_df)
-    if top_games.empty:
-        st.warning("Unable to calculate top games by year.")
-        return
-    
-    # Display statistics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Years Tracked", len(top_games))
-    with col2:
-        st.metric("Highest Rating", f"{top_games['aggregated_rating'].max():.1f}")
-    with col3:
-        st.metric("Lowest Rating", f"{top_games['aggregated_rating'].min():.1f}")
-    with col4:
-        avg_rating = top_games['aggregated_rating'].mean()
-        st.metric("Average Rating", f"{avg_rating:.1f}")
-    
-    # Display interactive chart
-    st.markdown("### Ratings Trend by Year")
-    fig = plot_top_games_by_rating(
-        top_games,
-        height=600,
-        show_labels=True,
-        label_top_n=3,
-        colormap='viridis'
+    # Build scatter plot
+    fig = px.scatter(
+        df,
+        x="release_year",
+        y="aggregated_rating",
+        opacity=0.35,
+        hover_data=["name"],
+        labels={"release_year": "Year", "aggregated_rating": "Aggregated Rating"},
     )
-    st.plotly_chart(fig, use_container_width=True)
     
-    # Display top 15 games table
-    st.markdown("### Top Games by Rating")
-    table_df = get_top_games_table(top_games, top_n=15)
-    st.dataframe(table_df, use_container_width=True)
+    # Highlight selected game
+    selected = df[df["id"] == game["id"]]
+    if not selected.empty:
+        fig.add_scatter(
+            x=selected["release_year"],
+            y=selected["aggregated_rating"],
+            mode="markers+text",
+            text=[game["name"]],
+            textposition="top center",
+            marker=dict(size=14, color="red"),
+            name="Selected Game",
+            showlegend=True,
+        )
+    
+    fig.update_layout(
+        title=f"Games in '{primary_genre}' Genre by Year and Rating",
+        showlegend=True,
+        legend=dict(yanchor="top", y=0.99, xanchor="right", x=0.99),
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def top_games_by_aggregated_rating(
+    df: pd.DataFrame,
+    min_year: int = 1998,
+    n_per_year: int = 1,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Compute top games by aggregated rating per year.
+
+    This helper filters the provided games DataFrame to rows with a
+    release year >= `min_year`, coerces the `aggregated_rating` column to
+    numeric, drops missing values, and returns two DataFrames:
+
+    - df_filtered_1998: the filtered DataFrame (release_year >= min_year)
+    - top_games_by_year: one or more top games per year sorted by
+      aggregated_rating (descending). The number of top games per year is
+      controlled by `n_per_year`.
+
+    Args:
+        df: Source games DataFrame. Expected to contain at least the
+            columns `release_year`, `aggregated_rating`, and `name`.
+        min_year: Minimum release year to include (inclusive). Default 1998.
+        n_per_year: Number of top games to return per year (default 1).
+
+    Returns:
+        Tuple[df_filtered_1998, top_games_by_year]
+    """
+    # Defensive copy: work on a view but avoid modifying caller's df
+    if df is None or df.empty:
+        empty = pd.DataFrame()
+        return empty, empty
+
+    expected_cols = {"release_year", "aggregated_rating", "name"}
+    missing = expected_cols - set(df.columns)
+    if missing:
+        # Return empty frames if required columns are missing
+        empty = pd.DataFrame()
+        return empty, empty
+
+    df_filtered_1998 = df[df["release_year"].notna() & (df["release_year"] >= min_year)].copy()
+    if df_filtered_1998.empty:
+        return df_filtered_1998, pd.DataFrame()
+
+    # Ensure aggregated_rating is numeric
+    df_filtered_1998["aggregated_rating"] = pd.to_numeric(
+        df_filtered_1998["aggregated_rating"], errors="coerce"
+    )
+
+    # Drop rows without a rating
+    df_filtered_1998 = df_filtered_1998[df_filtered_1998["aggregated_rating"].notna()]
+    if df_filtered_1998.empty:
+        return df_filtered_1998, pd.DataFrame()
+
+    # Sort then take top N per year
+    df_sorted = df_filtered_1998.sort_values(["release_year", "aggregated_rating"], ascending=[True, False])
+
+    if n_per_year <= 1:
+        top_games_by_year = df_sorted.groupby("release_year", as_index=False).first()
+    else:
+        top_games_by_year = (
+            df_sorted.groupby("release_year", as_index=False)
+            .head(n_per_year)
+            .reset_index(drop=True)
+        )
+
+    # Keep common display columns
+    cols_to_keep = [c for c in ["release_year", "name", "aggregated_rating", "id"] if c in top_games_by_year.columns]
+    top_games_by_year = top_games_by_year[cols_to_keep]
+
+    return df_filtered_1998, top_games_by_year
 
 
 # =============================================================================
@@ -385,8 +475,8 @@ def main():
         st.session_state.confirmed_game_id = None
     
     # Chart visibility toggle (to avoid loading chart + recommendations together)
-    if "show_top_games_chart" not in st.session_state:
-        st.session_state.show_top_games_chart = False
+    if "show_genre_chart" not in st.session_state:
+        st.session_state.show_genre_chart = False
     
     # =========================================================================
     # DATA AVAILABILITY CHECK (runs every time, but is lightweight - HEAD requests only)
@@ -615,8 +705,8 @@ def main():
                     st.session_state.show_genre_chart = False
                     st.rerun()
                 
-                st.markdown("### Top-Rated Games by Year")
-                display_top_games_by_rating()
+                st.markdown("### Genre Popularity Over Time")
+                display_genre_popularity(game_info)
         else:
             st.error("Could not load game details. Please try another game.")
     
@@ -654,6 +744,23 @@ def main():
                         st.session_state.phase = "details"
                         st.session_state.show_genre_chart = False  # Reset chart visibility
                         st.rerun()
+
+        # Small utility: allow user to preview top games by aggregated rating
+        with st.expander("Top Games by Aggregated Rating (preview)", expanded=False):
+            try:
+                games_df = load_games()
+                df_filtered_1998, top_games = top_games_by_aggregated_rating(games_df, min_year=1998, n_per_year=1)
+                if top_games.empty:
+                    st.info("No top games available for the selected filter.")
+                else:
+                    # Show a compact table
+                    display_cols = [c for c in ["release_year", "name", "aggregated_rating"] if c in top_games.columns]
+                    st.table(top_games.sort_values("aggregated_rating", ascending=False)[display_cols].head(10))
+            except Exception as e:
+                if debug_mode:
+                    st.exception(e)
+                else:
+                    st.caption("Top games preview currently unavailable.")
     
     # =========================================================================
     # FOOTER
