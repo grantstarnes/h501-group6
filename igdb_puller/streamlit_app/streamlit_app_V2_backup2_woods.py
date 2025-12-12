@@ -377,6 +377,7 @@ def display_top_games_by_year(game: dict):
         fig.add_annotation(
             x=row["release_year"],
             y=row["aggregated_rating"] + 0.7,
+            text=row.get("name", ""),
             showarrow=False,
             font=dict(size=10, color="black", family="Arial", weight="bold"),
             xanchor="center",
@@ -394,7 +395,7 @@ def display_top_games_by_year(game: dict):
             dtick=5,
             range=[min_year - 0.2, max_year + 0.2],
         ),
-        yaxis=dict(title="Aggregated Rating", range=[70, 105]),
+        yaxis=dict(title="Aggregated Rating", range=[70, 101]),
         coloraxis_colorbar=dict(title="Aggregated Rating")
     )
 
