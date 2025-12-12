@@ -30,7 +30,7 @@ DEPLOYMENT TO STREAMLIT COMMUNITY CLOUD:
 
 3. Click "New app" and select:
    - Repository: grantstarnes/h501-group6
-   - Branch: raj
+   - Branch: Woods
    - Main file path: igdb_puller/streamlit_app/streamlit_app_V2_backup.py
 
 4. No secrets needed (data is public on S3)
@@ -306,6 +306,41 @@ def display_top_games_by_year(game: dict):
     
     MEMORY OPTIMIZED: Uses vectorized operations and avoids unnecessary copying
     """
+    # Woods added
+    # Step 1: Load games csv
+df = pd.read_csv("games_20251015_1657.csv")
+
+# Step 2: Keep relevant columns only
+df = df[["name", "aggregated_rating", "first_release_date"]].copy()
+
+# Step 3: 'Clean aggregated_rating'
+# Convert to numeric, coerce errors to NaN
+df["aggregated_rating"] = pd.to_numeric(df["aggregated_rating"], errors="coerce")
+
+# Round to 1 decimal
+df["aggregated_rating"] = df["aggregated_rating"].round(1)
+
+# Optional: strictly format as string with 1 decimal
+df["aggregated_rating"] = df["aggregated_rating"].map(lambda x: f"{x:.1f}" if pd.notna(x) else "")
+
+# Step 4: Convert release date to year
+df["first_release_date"] = (
+    pd.to_numeric(df["first_release_date"], errors="coerce")
+      .astype("Int64")
+)
+
+df["release_year"] = pd.to_datetime(
+    df["first_release_date"], unit="s", errors="coerce"
+).dt.year
+
+df = df.dropna(subset=["release_year"])
+df["release_year"] = df["release_year"].astype(int)
+
+# Step 5: Filter for games released after 1997
+df_filtered_1998 = df[df["release_year"] > 1997].reset_index(drop=True)
+
+# new code above
+
     games_df = load_games()
     if games_df.empty:
         return
@@ -606,7 +641,7 @@ def main():
             else:
                 st.info("Recommendations will be available once the recommendations.parquet file is uploaded to S3.")
             
-            # Genre Popularity scatter plot - OPT-IN to avoid memory spike
+            # Game Popularity scatter plot - OPT-IN to avoid memory spike
             # Running this with recommendations would cause memory crash on Streamlit Cloud
             st.markdown("---")
             
