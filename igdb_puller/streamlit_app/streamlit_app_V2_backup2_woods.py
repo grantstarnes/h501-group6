@@ -344,8 +344,8 @@ def display_top_games_by_year(game: dict):
         st.caption("No top games available after filtering.")
         return
 
-    # Build a Plotly scatter that mirrors the notebook's matplotlib chart
-    # Custom colors similar to the notebook's green→blue→dark-blue palette
+    # Build plotly scatter plot that mirrors 'Highest_Rated_Games_by_Year.ipynb' scatter plot
+    # Custom colors for scatter plot
     colorscale = [
         [0.0, "#000040"],
         [0.5, "#0000ff"],
@@ -377,7 +377,6 @@ def display_top_games_by_year(game: dict):
         fig.add_annotation(
             x=row["release_year"],
             y=row["aggregated_rating"] + 0.7,
-            text=row.get("name", ""),
             showarrow=False,
             font=dict(size=10, color="black", family="Arial", weight="bold"),
             xanchor="center",
@@ -392,12 +391,11 @@ def display_top_games_by_year(game: dict):
         xaxis=dict(
             title="Release Year",
             tickmode="linear",
-            dtick=1,
+            dtick=5,
             range=[min_year - 0.2, max_year + 0.2],
         ),
-        yaxis=dict(title="Aggregated Rating", range=[70, 100]),
-        coloraxis_colorbar=dict(title="Aggregated Rating"),
-        template="simple_white",
+        yaxis=dict(title="Aggregated Rating", range=[70, 105]),
+        coloraxis_colorbar=dict(title="Aggregated Rating")
     )
 
     # Show the Plotly figure in Streamlit
